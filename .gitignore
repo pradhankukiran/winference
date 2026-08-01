@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+artifacts/
+.vs/
+.tools/
+*.user
+*.suo
+
+.codegraph/
+.claude/

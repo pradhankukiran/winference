@@ -1,0 +1,13 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/Winference.Core/Winference.Core.csproj" />
+    <Project Path="src/Winference.Infrastructure/Winference.Infrastructure.csproj" />
+    <Project Path="src/Winference.App/Winference.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Winference.Tests/Winference.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -89,4 +89,63 @@ public static class ModelRecommender
 public static class StorageCheck
 {
     public const long HeadroomBytes = 256L * 1024 * 1024;
+
+    public static bool HasRoom(long neededBytes, long freeBytes) => neededBytes <= 0 || freeBytes >= neededBytes + HeadroomBytes;
+
+    public static string Format(long bytes) => bytes >= 1_000_000_000
+        ? $"{bytes / 1_000_000_000d:0.0} GB"
+        : $"{Math.Max(1, (long)Math.Ceiling(bytes / 1_000_000d))} MB";
+}
+
+/// <summary>What the list tells someone about one model right now.</summary>
+public enum ModelStatus { NotInstalled, Downloading, Ready, Loading, Current, Failed }
+
+public static class ModelStatusRules
+{
+    /// <summary>Activity outranks history: a retry that is running is not still failed.</summary>
+    public static ModelStatus Resolve(bool installed, bool needsRepair, bool downloading, bool failed,
+        bool selected, bool loading, bool loaded)
+    {
+        if (downloading) return ModelStatus.Downloading;
+        if (selected && loading) return ModelStatus.Loading;
+        if (selected && loaded) return ModelStatus.Current;
+        if (failed || needsRepair) return ModelStatus.Failed;
+        return installed ? ModelStatus.Ready : ModelStatus.NotInstalled;
+    }
+}
+
+/// <summary>One readable name for a model, whichever catalog, file or chat it came from.</summary>
+public static partial class ModelNames
+{
+    public static string Clean(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var name = raw.Trim().Replace('_', ' ');
+        var keepHyphen = System.Text.RegularExpressions.Regex.IsMatch(name, "^gpt-oss", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (keepHyphen) name = "GPT‑OSS" + name[7..];
+        return string.Join(' ', name.Split(['-', ' '], StringSplitOptions.RemoveEmptyEntries).Select(Word)).Replace('‑', '-');
+    }
+
+    private static string Word(string word)
+    {
+        if (SizeWord().IsMatch(word)) return word.ToUpperInvariant();
+        if (NumberedWord().Match(word) is { Success: true } numbered)
+            return Capitalize(numbered.Groups[1].Value) + " " + numbered.Groups[2].Value;
+        return LowerWord().IsMatch(word) ? Capitalize(word) : word;
+    }
+
+    private static string Capitalize(string word) => char.ToUpperInvariant(word[0]) + word[1..];
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\d+(\.\d+)?[bBmM]$")] private static partial System.Text.RegularExpressions.Regex SizeWord();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^([A-Za-z]?[a-z]{2,})(\d+(\.\d+)?)$")] private static partial System.Text.RegularExpressions.Regex NumberedWord();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^[a-z]+$")] private static partial System.Text.RegularExpressions.Regex LowerWord();
+}
+
+/// <summary>When an idle model gives its memory and processor back. Wall-clock time, so time asleep counts as idle.</summary>
+public static class IdleUnloadPolicy
+{
+    public const int DefaultMinutes = 15;
+
+    public static bool ShouldUnload(DateTimeOffset lastActivity, DateTimeOffset now, TimeSpan? timeout, bool isLoaded, bool isBusy) =>
+        timeout is { } limit && isLoaded && !isBusy && now - lastActivity >= limit;
 }

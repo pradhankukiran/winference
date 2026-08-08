@@ -294,4 +294,59 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
         Finish(operation);
         return terminal;
     }
+
+    private async Task CompleteStopAsync(ActiveOperation? operation, TaskCompletionSource completion)
+    {
+        try
+        {
+            using var deadline = new CancellationTokenSource(_shutdownTimeout);
+            await StopBackendAsync(deadline.Token).ConfigureAwait(false);
+            if (operation is not null)
+            {
+                await operation.Completed.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
+                // A cancelled start may finish creating a child after the first
+                // stop call. Settle it once more after the operation's barrier.
+                await StopBackendAsync(deadline.Token).ConfigureAwait(false);
+            }
+            RuntimeSnapshot stopped;
+            lock (_sync)
+            {
+                stopped = SetSnapshot(RuntimeState.Idle, "AI stopped", null);
+                _cleanupUnconfirmed = false;
+                _stopping = null;
+            }
+            Publish(stopped);
+            completion.TrySetResult();
+        }
+        catch (Exception error)
+        {
+            var failure = error as RuntimeException ?? new RuntimeException("CleanupUnconfirmed",
+                "AI cleanup could not be confirmed. Close the app and check Diagnostics before loading a model.", error);
+            RuntimeSnapshot failed;
+            lock (_sync)
+            {
+                failed = SetSnapshot(RuntimeState.Error, failure.Message, null);
+                _cleanupUnconfirmed = true;
+                _stopping = null;
+            }
+            Publish(failed);
+            completion.TrySetException(failure);
+        }
+    }
+
+    private async Task StopBackendAsync(CancellationToken cancellationToken)
+    {
+        await _cleanupGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Task? stopping = null;
+        try
+        {
+            stopping = backend.StopAsync(cancellationToken);
+            await stopping.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (stopping is { IsCompleted: false }) _ = ReleaseCleanupGateWhenSettledAsync(stopping);
+            else _cleanupGate.Release();
+        }
+    }
 }

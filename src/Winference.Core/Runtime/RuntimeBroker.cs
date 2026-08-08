@@ -197,4 +197,101 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
             }
         }
     }
+
+    public Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        Task stop;
+        ActiveOperation? operation = null;
+        TaskCompletionSource? completion = null;
+        RuntimeSnapshot? stopping = null;
+        lock (_sync)
+        {
+            if (_stopping is not null) stop = _stopping;
+            else if (_active is null && _snapshot.State == RuntimeState.Idle && !_cleanupUnconfirmed) return Task.CompletedTask;
+            else
+            {
+                ++_revision;
+                operation = _active;
+                completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                stop = _stopping = completion.Task;
+                stopping = SetSnapshot(RuntimeState.Stopping, "Stopping AI…", null);
+            }
+        }
+        if (completion is not null)
+        {
+            if (stopping is not null) Publish(stopping);
+            operation?.RequestCancellation();
+            _ = CompleteStopAsync(operation, completion);
+        }
+        return cancellationToken.CanBeCanceled ? stop.WaitAsync(cancellationToken) : stop;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        lock (_sync)
+        {
+            if (_disposed) return;
+            _disposing = true;
+        }
+        await StopAsync(CancellationToken.None).ConfigureAwait(false);
+        lock (_sync) _disposed = true;
+        // The gate remains valid if a caller retained a pending operation. It
+        // contains no native resource and is intentionally not disposed early.
+    }
+
+    private async Task<GenerationEvent> PumpGenerationAsync(ActiveOperation operation, RuntimeSession session,
+        GenerationRequest request, ChannelWriter<GenerationEvent> writer)
+    {
+        GenerationEvent terminal;
+        try
+        {
+            GenerationEvent? receivedTerminal = null;
+            await foreach (var item in backend.GenerateAsync(session, request, operation.Cancellation.Token)
+                .WithCancellation(operation.Cancellation.Token).ConfigureAwait(false))
+            {
+                operation.Cancellation.Token.ThrowIfCancellationRequested();
+                if (item.IsTerminal)
+                {
+                    receivedTerminal = item;
+                    break;
+                }
+                if (!Enum.IsDefined(item.Kind) || (item.Kind == GenerationEventKind.TextDelta && item.Text is null))
+                    throw new RuntimeException("InvalidStream", "The model returned an invalid reply. Try loading the model again.");
+                await writer.WriteAsync(item, operation.Cancellation.Token).ConfigureAwait(false);
+            }
+            operation.Cancellation.Token.ThrowIfCancellationRequested();
+            terminal = receivedTerminal ?? throw new RuntimeException("InterruptedStream", "The reply ended unexpectedly. Try loading the model again.");
+            if (terminal.Kind is GenerationEventKind.Cancelled or GenerationEventKind.Failed)
+            {
+                var cleanupError = await TryStopBackendAsync().ConfigureAwait(false);
+                if (cleanupError is not null) terminal = new(GenerationEventKind.Failed, Error: cleanupError.Message);
+            }
+        }
+        catch (Exception error)
+        {
+            var cancelled = error is OperationCanceledException || operation.Cancellation.IsCancellationRequested;
+            var cleanupError = await TryStopBackendAsync().ConfigureAwait(false);
+            terminal = cleanupError is not null ? new(GenerationEventKind.Failed, Error: cleanupError.Message)
+                : cancelled ? new(GenerationEventKind.Cancelled)
+                : new(GenerationEventKind.Failed, Error: SafeMessage(error));
+        }
+        finally { writer.TryComplete(); }
+
+        RuntimeSnapshot? settled = null;
+        lock (_sync)
+        {
+            if (!IsCurrent(operation) && terminal.Kind == GenerationEventKind.Completed)
+                terminal = new(GenerationEventKind.Cancelled);
+            if (IsCurrent(operation))
+                settled = terminal.Kind switch
+                {
+                    GenerationEventKind.Completed => SetSnapshot(RuntimeState.Ready, $"Ready · {session.Device}", session),
+                    GenerationEventKind.Cancelled => SetSnapshot(RuntimeState.Idle, "AI stopped", null),
+                    _ => SetSnapshot(RuntimeState.Error, terminal.Error ?? "The reply was interrupted. Load the model again.", null)
+                };
+        }
+        if (settled is not null) Publish(settled);
+        Finish(operation);
+        return terminal;
+    }
 }

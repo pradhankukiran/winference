@@ -396,4 +396,77 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
             catch (Exception error) { Debug.WriteLine($"Runtime state subscriber failed: {error.GetType().Name}"); }
         }
     }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposing || _disposed, this);
+    }
+
+    private static RuntimeException Busy() => new("Busy", "Wait for the current AI operation to finish.");
+
+    private static string SafeMessage(Exception error) => error is RuntimeException runtimeError
+        ? runtimeError.Message : "AI could not complete the operation. Try loading the model again.";
+
+    private static void ValidateSession(RuntimeSession session, ModelProfile profile)
+    {
+        if (session.SessionId == Guid.Empty || session.Profile != profile || session.EffectiveContextLength != profile.ContextLength ||
+            !session.Endpoint.IsAbsoluteUri || !session.Endpoint.IsLoopback ||
+            session.Endpoint.Scheme is not ("http" or "https") ||
+            string.IsNullOrWhiteSpace(session.Engine) || string.IsNullOrWhiteSpace(session.Device) ||
+            string.IsNullOrWhiteSpace(session.OwnershipProof))
+            throw new RuntimeException("ReadinessMismatch", "The loaded model or device could not be verified. Load it again.");
+    }
+
+    private static ChatMessage[] ValidateMessages(IReadOnlyList<ChatMessage> messages, int outputLimit, ModelProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        if (outputLimit <= 0 || outputLimit > profile.MaxOutputTokens || outputLimit >= profile.ContextLength)
+            throw new RuntimeException("OutputLimit", "The reply limit exceeds this model profile's configured limit.");
+        if (messages.Count is < 1 or > 64)
+            throw new RuntimeException("MessageLimit", "This chat is too long. Start a new chat before sending another message.");
+        var copied = new ChatMessage[messages.Count];
+        var bytes = 0L;
+        for (var i = 0; i < messages.Count; ++i)
+        {
+            var message = messages[i];
+            if (message is null || message.Role is not ("system" or "user" or "assistant") || string.IsNullOrWhiteSpace(message.Content))
+                throw new RuntimeException("InvalidMessage", "The chat contains an empty or unsupported message.");
+            bytes += Encoding.UTF8.GetByteCount(message.Content);
+            if (bytes > 262144)
+                throw new RuntimeException("PayloadLimit", "This message is too large. Shorten it or start a new chat.");
+            if (message.HasImages)
+            {
+                if (!profile.SupportsImages)
+                    throw new RuntimeException("ImagesUnsupported", "This model can't see pictures. Choose a vision model, or attach the picture as a document.");
+                if (message.Role != "user" || message.Images!.Count > ChatImage.MaxPerMessage ||
+                    message.Images.Any(image => image is null || image.Data.Length is 0 or > ChatImage.MaxBytes || image.MediaType is not ("image/jpeg" or "image/png")))
+                    throw new RuntimeException("InvalidImage", "The picture is too large or in an unsupported format.");
+            }
+            copied[i] = message;
+        }
+        if (copied[^1].Role != "user")
+            throw new RuntimeException("InvalidMessage", "Send a user message to request a reply.");
+        // This is only a transport bound. The backend must enforce the actual
+        // tokenizer/context contract; bytes or characters are not token counts.
+        return copied;
+    }
+
+    private sealed class ActiveOperation(long revision, CancellationToken cancellationToken)
+    {
+        public long Revision { get; } = revision;
+        public CancellationTokenSource Cancellation { get; } = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void RequestCancellation()
+        {
+            try { Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { /* The operation settled between capture and cancellation. */ }
+            catch (AggregateException error)
+            {
+                // A backend callback must not prevent the owned-process stop
+                // barrier from running. Its failure does not prove cleanup.
+                Debug.WriteLine($"Runtime cancellation callback failed: {error.GetType().Name}");
+            }
+        }
+    }
 }

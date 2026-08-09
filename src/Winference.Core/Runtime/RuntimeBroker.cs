@@ -349,4 +349,51 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
             else _cleanupGate.Release();
         }
     }
+
+    private async Task ReleaseCleanupGateWhenSettledAsync(Task stopping)
+    {
+        try { await stopping.ConfigureAwait(false); }
+        catch (Exception) { /* The original waiter reports cleanup unconfirmed. */ }
+        finally { _cleanupGate.Release(); }
+    }
+
+    private async Task<RuntimeException?> TryStopBackendAsync()
+    {
+        try
+        {
+            using var deadline = new CancellationTokenSource(_shutdownTimeout);
+            await StopBackendAsync(deadline.Token).ConfigureAwait(false);
+            lock (_sync) _cleanupUnconfirmed = false;
+            return null;
+        }
+        catch (Exception error)
+        {
+            lock (_sync) _cleanupUnconfirmed = true;
+            return error as RuntimeException ?? new RuntimeException("CleanupUnconfirmed",
+                "AI cleanup could not be confirmed. Check Diagnostics before loading a model.", error);
+        }
+    }
+
+    private void Finish(ActiveOperation operation)
+    {
+        lock (_sync) if (ReferenceEquals(_active, operation)) _active = null;
+        operation.Completed.TrySetResult();
+        operation.Cancellation.Dispose();
+    }
+
+    private bool IsCurrent(ActiveOperation operation) =>
+        ReferenceEquals(_active, operation) && operation.Revision == _revision && _stopping is null;
+
+    private RuntimeSnapshot SetSnapshot(RuntimeState state, string detail, RuntimeSession? session) =>
+        _snapshot = new(state, detail, session, _revision);
+
+    private void Publish(RuntimeSnapshot snapshot)
+    {
+        if (Changed is not { } handlers) return;
+        foreach (EventHandler<RuntimeSnapshot> handler in handlers.GetInvocationList())
+        {
+            try { handler(this, snapshot); }
+            catch (Exception error) { Debug.WriteLine($"Runtime state subscriber failed: {error.GetType().Name}"); }
+        }
+    }
 }

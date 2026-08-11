@@ -111,4 +111,61 @@ public sealed class ConversationSession(IConversationStore store) : INotifyPrope
         if (_savedRevision != _revision)
             throw new IOException(SaveError.Length > 0 ? SaveError : "Your latest conversation could not be saved.");
     }
+
+    private void Changed()
+    {
+        ++_revision;
+        EnsureSave();
+    }
+
+    private void EnsureSave()
+    {
+        if (_loadFailed || _saveTask is not null || _savedRevision == _revision) return;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _saveTask = completion.Task;
+        _ = SaveLoopAsync(completion);
+    }
+
+    private async Task SaveLoopAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            // Typing and streamed tokens update memory immediately. Avoid one disk write per token.
+            await Task.Delay(250);
+            while (_savedRevision != _revision)
+            {
+                var revision = _revision;
+                var snapshot = _workspace;
+                await store.SaveAsync(snapshot);
+                _savedRevision = revision;
+                SetError(null);
+                if (_savedRevision != _revision) await Task.Delay(250);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            SetError("Your latest chat changes could not be saved. Check available storage and folder access, then try again.");
+        }
+        finally
+        {
+            _saveTask = null;
+            completion.TrySetResult();
+        }
+    }
+
+    private void SetError(string? value)
+    {
+        if (_error == value) return;
+        _error = value;
+        PropertyChanged?.Invoke(this, new(nameof(SaveError)));
+        PropertyChanged?.Invoke(this, new(nameof(HasSaveError)));
+    }
+}
+
+public sealed record ConversationListItem
+{
+    public ConversationListItem(Guid id, string title) { Id = id; Title = title; }
+    public Guid Id { get; }
+    public string Title { get; }
+    public string Identity => Id.ToString("N");
 }

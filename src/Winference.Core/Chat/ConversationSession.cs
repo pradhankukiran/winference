@@ -56,4 +56,59 @@ public sealed class ConversationSession(IConversationStore store) : INotifyPrope
     public static bool ModelChanged(string? lastReplyModelId, string modelId,
         ConversationCompatibility? conversation, ConversationCompatibility? current) =>
         lastReplyModelId is not null && lastReplyModelId != modelId && (current is null || current != conversation);
+
+    public static SavedConversation New(string modelId, ModelProfile profile) =>
+        new(Guid.NewGuid(), modelId, profile.ProfileId, profile.ArtifactId, "New chat", DateTimeOffset.UtcNow, string.Empty, [], profile.ConversationCompatibility);
+
+    public void Update(SavedConversation conversation)
+    {
+        var items = _workspace.Conversations.Where(item => item.Id != conversation.Id).Append(conversation).ToArray();
+        _workspace = new(ChatWorkspace.CurrentSchemaVersion, conversation.Id, items);
+        Changed();
+    }
+
+    /// <summary>Saves a name the user chose, which later messages will not overwrite.</summary>
+    public bool Rename(Guid id, string title)
+    {
+        var trimmed = title?.Trim() ?? string.Empty;
+        if (trimmed.Length == 0 || _workspace.Conversations.All(item => item.Id != id)) return false;
+        if (trimmed.Length > MaximumTitleLength) trimmed = trimmed[..MaximumTitleLength];
+        var items = _workspace.Conversations
+            .Select(item => item.Id == id ? item with { Title = trimmed, HasCustomTitle = true } : item).ToArray();
+        _workspace = _workspace with { Conversations = items };
+        Changed();
+        return true;
+    }
+
+    /// <summary>Removes a conversation. If it was open, the most recent remaining one becomes active.</summary>
+    public bool Delete(Guid id)
+    {
+        if (_workspace.Conversations.All(item => item.Id != id)) return false;
+        var items = _workspace.Conversations.Where(item => item.Id != id).ToArray();
+        var active = _workspace.ActiveConversationId == id
+            ? items.OrderByDescending(item => item.UpdatedUtc).Select(item => (Guid?)item.Id).FirstOrDefault()
+            : _workspace.ActiveConversationId;
+        _workspace = _workspace with { ActiveConversationId = active, Conversations = items };
+        Changed();
+        return true;
+    }
+
+    /// <summary>Newest first. Matches the title or the text of any message.</summary>
+    public IReadOnlyList<SavedConversation> Search(string? query)
+    {
+        var text = query?.Trim() ?? string.Empty;
+        return _workspace.Conversations
+            .Where(item => text.Length == 0 || item.Title.Contains(text, StringComparison.CurrentCultureIgnoreCase) ||
+                item.Messages.Any(message => message.Text.Contains(text, StringComparison.CurrentCultureIgnoreCase)))
+            .OrderByDescending(item => item.UpdatedUtc)
+            .ToArray();
+    }
+
+    public async Task FlushAsync()
+    {
+        EnsureSave();
+        if (_saveTask is { } pending) await pending;
+        if (_savedRevision != _revision)
+            throw new IOException(SaveError.Length > 0 ? SaveError : "Your latest conversation could not be saved.");
+    }
 }

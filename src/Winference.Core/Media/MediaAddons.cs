@@ -87,4 +87,52 @@ public static class MediaAddons
         ("bf_emma", "Emma (UK, female)"),
         ("bm_george", "George (UK, male)"),
     ];
+
+    public const string DefaultVoice = "af_heart";
+}
+
+/// <summary>Download progress across all files of one model.</summary>
+public sealed record MediaDownloadProgress(long BytesDone, long BytesTotal, string File, bool Complete)
+{
+    public double Fraction => BytesTotal > 0 ? Math.Clamp((double)BytesDone / BytesTotal, 0, 1) : Complete ? 1 : 0;
+}
+
+/// <summary>
+/// Reads Lemonade's pull stream: "event: progress|complete|error" lines, each followed by a
+/// "data: {json}" line. Per-file byte counts are turned into an overall total.
+/// </summary>
+public sealed class PullStreamParser
+{
+    private string _event = "message";
+    private readonly Dictionary<int, long> _doneByFile = [];
+    private long _total;
+
+    /// <summary>Returns progress for a data line, null for other lines. Throws on an error event.</summary>
+    public MediaDownloadProgress? Feed(string line)
+    {
+        if (line.StartsWith("event:", StringComparison.Ordinal))
+        {
+            _event = line[6..].Trim();
+            return null;
+        }
+        if (!line.StartsWith("data:", StringComparison.Ordinal)) return null;
+        var json = line[5..].Trim();
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        if (_event == "error" || root.TryGetProperty("error", out _))
+        {
+            var message = root.TryGetProperty("error", out var error)
+                ? error.ValueKind == JsonValueKind.String ? error.GetString() : error.TryGetProperty("message", out var m) ? m.GetString() : error.GetRawText()
+                : json;
+            throw new Runtime.RuntimeException("media_download", "The download failed: " + message);
+        }
+        if (root.TryGetProperty("total_download_size", out var totalSize) && totalSize.GetInt64() > 0) _total = totalSize.GetInt64();
+        var index = root.TryGetProperty("file_index", out var fileIndex) ? fileIndex.GetInt32() : 1;
+        var bytes = root.TryGetProperty("bytes_downloaded", out var downloaded) ? downloaded.GetInt64() : 0;
+        var file = root.TryGetProperty("file", out var name) ? name.GetString() ?? string.Empty : string.Empty;
+        var complete = _event == "complete";
+        if (!complete && file.Length > 0) _doneByFile[index] = Math.Max(_doneByFile.GetValueOrDefault(index), bytes);
+        var done = complete ? _total : _doneByFile.Values.Sum();
+        return new(done, _total, file, complete);
+    }
 }

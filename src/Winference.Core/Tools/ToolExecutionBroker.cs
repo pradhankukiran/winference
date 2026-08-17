@@ -131,4 +131,70 @@ public sealed partial class ToolExecutionBroker
         foreach (Match match in FencedJson().Matches(text)) yield return match.Groups["body"].Value;
         yield return text;
     }
+
+    private static readonly string[] NameKeys = ["name", "tool_name", "tool", "function_name"];
+
+    /// <summary>Each top-level balanced {...} in the text, in order, respecting strings.</summary>
+    private static IEnumerable<string> JsonObjects(string text)
+    {
+        var start = text.IndexOf('{');
+        while (start >= 0)
+        {
+            var end = ObjectEnd(text, start);
+            if (end < 0) { start = text.IndexOf('{', start + 1); continue; }
+            yield return text[start..(end + 1)];
+            start = text.IndexOf('{', end + 1);
+        }
+    }
+
+    private static int ObjectEnd(string text, int start)
+    {
+        var depth = 0;
+        var inString = false;
+        for (var i = start; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (inString)
+            {
+                if (c == '\\') i++;
+                else if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') inString = true;
+            else if (c == '{') depth++;
+            else if (c == '}' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    private static JsonElement ParseNested(string? json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException) { return EmptyObject(); }
+    }
+
+    private static JsonElement EmptyObject()
+    {
+        using var document = JsonDocument.Parse("{}");
+        return document.RootElement.Clone();
+    }
+
+    // An unclosed tag still counts: the model may stop right after the JSON.
+    [GeneratedRegex(@"<tool_call>(?<body>[\s\S]*?)(</tool_call>|$)", RegexOptions.IgnoreCase, 2000)]
+    private static partial Regex TaggedCall();
+
+    // tool_call followed by a bare or quoted name: <tool_call>"list_directory", {...}  or  /tool_call=list_directory {...}
+    [GeneratedRegex(@"tool_call\s*>?\s*[=:]?\s*""?(?<name>[a-z][a-z0-9_]*)""?\s*[,:(]?", RegexOptions.IgnoreCase, 2000)]
+    private static partial Regex AfterMarker();
+
+    // Function-call syntax: list_directory({...})
+    [GeneratedRegex(@"\b(?<name>[a-z][a-z0-9_]*)\(", RegexOptions.IgnoreCase, 2000)]
+    private static partial Regex CallSyntax();
+
+    [GeneratedRegex(@"```(?:json)?\s*(?<body>\{[\s\S]*?\})\s*```", RegexOptions.IgnoreCase, 2000)]
+    private static partial Regex FencedJson();
 }

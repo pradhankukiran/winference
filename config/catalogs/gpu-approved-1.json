@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "revision": "winference-approved-gguf/1",
+  "attribution": "Selected GGUF entries adapted from Osmantic/ODS ods/config/model-library.json at revision 72e59cdc665fc576d300061cabb5b980cbbaf1da (Apache-2.0). Source URLs, file sizes and SHA-256 values are copied unchanged for the selected entries. A catalog entry is an approved mapping, not a local execution qualification.",
+  "models": [
+    {
+      "id": "llama3.2-1b-instruct-q4",
+      "familyId": "llama-3.2-1b-instruct",
+      "displayName": "Llama 3.2 1B Instruct",
+      "publisher": "Meta",
+      "description": "Meta's smallest Llama 3.2 instruct model, quantized for local GPU chat.",
+      "fileName": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/b69aef112e9f895e6f98d7ae0949f72ff09aa401/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "sourcePage": "https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF",
+      "revision": "b69aef112e9f895e6f98d7ae0949f72ff09aa401",
+      "sha256": "3f5a22426976ab26cfe84dba63c1d08391717abb1af893e10f1b2968d862dcc1",
+      "lengthBytes": 807694368,
+      "quantization": "Q4_K_M",
+      "contextLength": 131072
+    },
+    {
+      "id": "qwen2.5-3b-instruct-q4",
+      "familyId": "qwen2.5-3b-instruct",
+      "displayName": "Qwen 2.5 3B Instruct",
+      "publisher": "Alibaba Qwen",
+      "description": "Compact general-purpose Qwen instruction model, quantized for local GPU chat.",
+      "fileName": "qwen2.5-3b-instruct-q4_k_m.gguf",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/7dabda4d13d513e3e842b20f0d435c732f172cbe/qwen2.5-3b-instruct-q4_k_m.gguf",
+      "sourcePage": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF",
+      "revision": "7dabda4d13d513e3e842b20f0d435c732f172cbe",
+      "sha256": "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
+      "lengthBytes": 2104932768,
+      "quantization": "Q4_K_M",
+      "contextLength": 32768
+    },
+    {
+      "id": "phi4-mini-instruct-q4",
+      "familyId": "phi-4-mini-instruct",
+      "displayName": "Phi-4 Mini Instruct",
+      "publisher": "Microsoft",
+      "description": "Microsoft's compact instruct model with long-context support, quantized for local GPU chat.",
+      "fileName": "Phi-4-mini-instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80/Phi-4-mini-instruct-Q4_K_M.gguf",
+      "sourcePage": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF",
+      "revision": "78eb92a46fc37e6b524df991ed9aca9bc6aa7b80",
+      "sha256": "88c00229914083cd112853aab84ed51b87bdf6b9ce42f532d8c85c7c63b1730a",
+      "lengthBytes": 2491874272,
+      "quantization": "Q4_K_M",
+      "contextLength": 128000
+    },
+    {
+      "id": "llama3.1-8b-instruct-q4",
+      "familyId": "llama-3.1-8b-instruct",
+      "displayName": "Llama 3.1 8B Instruct",
+      "publisher": "Meta",
+      "description": "Meta's 8B long-context instruct model, quantized for local GPU chat on larger memory budgets.",
+      "fileName": "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "url": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/bf5b95e96dac0462e2a09145ec66cae9a3f12067/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "sourcePage": "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
+      "revision": "bf5b95e96dac0462e2a09145ec66cae9a3f12067",
+      "sha256": "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c",
+      "lengthBytes": 4920739232,
+      "quantization": "Q4_K_M",
+      "contextLength": 128000
+    }
+  ]
+}

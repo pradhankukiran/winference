@@ -1,0 +1,3 @@
+# FastFlowLM catalog snapshot
+
+These JSON files are unmodified snapshots from ROCm/FastFlowLM tag v1.0.10: src/model_list.json and src/model_info.json. Source: https://github.com/ROCm/FastFlowLM/tree/v1.0.10/src. They supply the NPU-only text-chat catalog and supplier file sizes/checksums. The catalog's size field is parameter count, not download bytes. Multimodal, embedding, transcription and single-turn recipes are excluded by the first-run service. A catalog listing is not local hardware qualification. The copied package has its MIT license at https://github.com/ROCm/FastFlowLM/blob/v1.0.10/LICENSE_RUNTIME.txt, copied unmodified as LICENSE-FastFlowLM.txt. No model weights are included.

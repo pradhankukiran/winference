@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "modelName": "Llama 3.2 1B Instruct",
+  "executionMode": "GpuNpu",
+  "provider": "RyzenAI",
+  "runtimeVersion": "1.7.0",
+  "contextLength": 2048,
+  "maxOutputTokens": 256,
+  "promptFormat": "llama3-text-template-session-date",
+  "repositoryId": "amd/Llama-3.2-1B-Instruct-onnx-ryzenai-1.7-hybrid",
+  "revision": "4a814619e51faf20b93d1b14792d1c1d99586dbf",
+  "totalLengthBytes": 1892981343,
+  "manifestSha256": "1ab4e8f1c42d20c604d88f97c55d7ec14526de58eb09d18a15d82390eb9d78fc",
+  "modelFiles": [
+    {
+      "name": ".gitattributes",
+      "lengthBytes": 1626,
+      "sha256": "e79f92b604d06b8a1c71bab60cb5ada14142d0969289ef2e62c569b475055cd3"
+    },
+    {
+      "name": "README.md",
+      "lengthBytes": 14747,
+      "sha256": "c495ec00b8179bdc03c3e7fb393a8c5014f3ba8dccdd633db967b34c687979ae"
+    },
+    {
+      "name": "chat_template.jinja",
+      "lengthBytes": 3920,
+      "sha256": "b582d2fda0f25a88324b6b5d56812b56f6f2c7890a08c9503cbed42ed70c7f3e"
+    },
+    {
+      "name": "genai_config.json",
+      "lengthBytes": 1794,
+      "sha256": "8e1ca7f099424bb9e98223837673594b4b7e2565979938f33f0af5d0a22aa031"
+    },
+    {
+      "name": "genai_config_bkp.json",
+      "lengthBytes": 1977,
+      "sha256": "707ae2f9bb73c2205d406956719fbbd9995ecb91eef94f1c9095a8874fbe88de"
+    },
+    {
+      "name": "model_jit.bin",
+      "lengthBytes": 690836480,
+      "sha256": "fd38d3c80e1abf190196ece79179c4544526926aa327d200a84978ed92c3dca8"
+    },
+    {
+      "name": "model_jit.onnx",
+      "lengthBytes": 175354,
+      "sha256": "188bf12a5c15475f39d81ebffde100a5765035042006d8be617520e06a7346f3"
+    },
+    {
+      "name": "model_jit.onnx.data",
+      "lengthBytes": 1184678400,
+      "sha256": "563c00932d33af18983712f8d058f02ffdf7f0abc6a3c7fe21aa644e1992e583"
+    },
+    {
+      "name": "model_jit.pb.bin",
+      "lengthBytes": 4019,
+      "sha256": "b02b320dca4970d9dcd0dc8bc334191055f50661d02c7385783000b695519434"
+    },
+    {
+      "name": "special_tokens_map.json",
+      "lengthBytes": 462,
+      "sha256": "ce60d5de985d327e16799ec02dfac7539d6e9b111c3cfb802d4e3336f3581659"
+    },
+    {
+      "name": "tokenizer.json",
+      "lengthBytes": 17209920,
+      "sha256": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "lengthBytes": 52644,
+      "sha256": "da8239e10288096c16ab2dece6456ea527a9267d17beabafd9a6f0f47678895b"
+    }
+  ]
+}

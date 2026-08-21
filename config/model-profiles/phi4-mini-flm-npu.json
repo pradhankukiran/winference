@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "modelFamilyId": "phi-4-mini-instruct",
+  "profileId": "phi4-mini-flm-1.0.10-npu-ctx2048-v1",
+  "artifactId": "sha256:9712b7872c91b3e02abf58b57f4f4e4f93b6eb701ba1e6136d4dd54202df43f3",
+  "providerModelId": "phi4-mini-it-4b-FLM",
+  "checkpoint": "phi4-mini-it:4b",
+  "executionMode": "NpuOnly",
+  "contextLength": 2048,
+  "maxOutputTokens": 256,
+  "modelDirectory": "Phi4-mini-Instruct-NPU2",
+  "modelFiles": [
+    {
+      "name": "config.json",
+      "lengthBytes": 2665,
+      "sha256": "86f90ca540916391f3068f9ea3d4e6ca12c2516303018cbbf43fca8ad8306adf"
+    },
+    {
+      "name": "model.q4nx",
+      "lengthBytes": 3627014968,
+      "sha256": "13b91962618b76f6ff205c1fe5afa20ce6a656df82ce877dcd3db1874ece21c8"
+    },
+    {
+      "name": "tokenizer.json",
+      "lengthBytes": 15524095,
+      "sha256": "382cc235b56c725945e149cc25f191da667c836655efd0857b004320e90e91ea"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "lengthBytes": 2976,
+      "sha256": "9dc0f15718641e10f53876a9aee36e6a266f5fbf508307dab24b0d1f5c9c5f02"
+    }
+  ],
+  "flmVersion": "1.0.10",
+  "flmExecutableSha256": "de83c3a34cc759e65e59831923e90205e799296bb277d38907b397c960573190",
+  "lemonadeVersion": "2026.42.1",
+  "lemonadeExecutableSha256": "2b2d227265cd3e3822f6af469403f421512d6c1d37df556d100ef4ca46945ea2",
+  "lemonadeArchiveSha256": "6bc9b9f301aa8235f2e6a2a51d75f0ba0f9cb3580e65ff0ea4fc6752ef3a8f3f",
+  "source": "https://github.com/lemonade-sdk/lemonade/releases/tag/v2026.42.1",
+  "tokenizerPolicy": "phi4-exact"
+}

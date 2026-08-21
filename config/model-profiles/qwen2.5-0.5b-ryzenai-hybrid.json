@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "modelName": "Qwen2.5 0.5B Instruct",
+  "publisher": "AMD",
+  "repositoryId": "amd/Qwen2.5-0.5B-Instruct-onnx-ryzenai-1.7-hybrid",
+  "revision": "878c8759108e75a1cd86721f63a133bfa67c6a4a",
+  "sourceUrl": "https://huggingface.co/amd/Qwen2.5-0.5B-Instruct-onnx-ryzenai-1.7-hybrid/tree/878c8759108e75a1cd86721f63a133bfa67c6a4a",
+  "license": "MIT",
+  "executionMode": "GpuNpu",
+  "recipe": "ryzenai-llm",
+  "modelFamilyId": "amd/Qwen2.5-0.5B-Instruct-onnx-ryzenai-1.7-hybrid@878c8759108e75a1cd86721f63a133bfa67c6a4a",
+  "profileId": "hybrid-9106ff4034e7e32601c8abad3d3a2257311f349ae15131c6d44f97b2191eeddb-ryzenai1.7-c2048",
+  "artifactId": "sha256:9106ff4034e7e32601c8abad3d3a2257311f349ae15131c6d44f97b2191eeddb",
+  "providerModelId": "user.Winference-Hybrid-9106ff4034e7e326",
+  "contextLength": 2048,
+  "maxOutputTokens": 256,
+  "manifestSha256": "9106ff4034e7e32601c8abad3d3a2257311f349ae15131c6d44f97b2191eeddb",
+  "manifestDigestAlgorithm": "SHA256 of ordinal-sorted name + TAB + decimal lengthBytes + TAB + lowercase sha256 + LF, UTF-8",
+  "totalLengthBytes": 828359044,
+  "modelFiles": [
+    {
+      "name": ".gitattributes",
+      "lengthBytes": 1626,
+      "sha256": "e79f92b604d06b8a1c71bab60cb5ada14142d0969289ef2e62c569b475055cd3"
+    },
+    {
+      "name": "README.md",
+      "lengthBytes": 8741,
+      "sha256": "e558273f57011c2e315a4ef80161c4edcea21e9f9cfb2e239bd920d7c970cb18"
+    },
+    {
+      "name": "added_tokens.json",
+      "lengthBytes": 629,
+      "sha256": "f0acedf99e19ec0a5b797ffbd0b94328172ccd90f7f385bbc521cda2701b03ab"
+    },
+    {
+      "name": "chat_template.jinja",
+      "lengthBytes": 2561,
+      "sha256": "8aa40ce145adb73cb3a75194dc0224702a95850ec5275cabb728496bbd749fc6"
+    },
+    {
+      "name": "genai_config.json",
+      "lengthBytes": 1814,
+      "sha256": "6e4db86cbe9d48424c666f364233a20bd83545ab117b036cba0494908d26c4aa"
+    },
+    {
+      "name": "genai_config_bkp.json",
+      "lengthBytes": 1996,
+      "sha256": "f5aa9d0bf20fe968a3aa4687ce24ccd5f45a8c90739f9afaee96311b14b3f394"
+    },
+    {
+      "name": "merges.txt",
+      "lengthBytes": 1671853,
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+    },
+    {
+      "name": "model_jit.bin",
+      "lengthBytes": 278388736,
+      "sha256": "612b8c891ec74490c97f0a76352af3305e6b5d493d9c964ec1d21ab70fd73471"
+    },
+    {
+      "name": "model_jit.onnx",
+      "lengthBytes": 271180,
+      "sha256": "41ed32c4edf7c8fc7a293d66918ca14fc97bf60eb377a8494867c82070f2c551"
+    },
+    {
+      "name": "model_jit.onnx.data",
+      "lengthBytes": 533799168,
+      "sha256": "bef0a4237d6c425c695a95cdf16c94e6fa7d179f4abee18f399974d91a9a85a0"
+    },
+    {
+      "name": "model_jit.pb.bin",
+      "lengthBytes": 3999,
+      "sha256": "9959362665f0c080014470ddc417e16c3ad9f734ae6c322973ecc2ff3af46414"
+    },
+    {
+      "name": "special_tokens_map.json",
+      "lengthBytes": 647,
+      "sha256": "a9b9de9d109651567e89fee2768f5a034e5b0036ce56ebfaece94d8842ed406d"
+    },
+    {
+      "name": "tokenizer.json",
+      "lengthBytes": 11421896,
+      "sha256": "9c5ae00e602b8860cbd784ba82a8aa14e8feecec692e7076590d014d7b7fdafa"
+    },
+    {
+      "name": "tokenizer_config.json",
+      "lengthBytes": 7365,
+      "sha256": "58b1c11ea844df0d03da3436950e1e8b2acec25069f77f806d346973856ccc49"
+    },
+    {
+      "name": "vocab.json",
+      "lengthBytes": 2776833,
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    }
+  ],
+  "executionQualified": false,
+  "qualificationNote": "Unusable replies reproduced on the development laptop with both Winference and upstream Ryzen AI Server. Preserved for diagnosis; not offered for execution in this build."
+}

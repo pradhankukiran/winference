@@ -93,4 +93,69 @@ public sealed class OwnedProcessSession : IDisposable
             outWrite?.Dispose(); errWrite?.Dispose(); input?.Dispose();
         }
     }
+
+    public IReadOnlyList<int> GetProcessIds()
+    {
+        var buffer = Marshal.AllocHGlobal(8 + 512 * IntPtr.Size);
+        try
+        {
+            if (!QueryInformationJobObject(_job, 3, buffer, (uint)(8 + 512 * IntPtr.Size), out _))
+                throw new Win32Exception();
+            var count = Marshal.ReadInt32(buffer, 4);
+            if (count < 0 || count > 512) throw new InvalidOperationException("Unexpected runtime process count.");
+            return Enumerable.Range(0, count).Select(i => checked((int)Marshal.ReadIntPtr(buffer, 8 + i * IntPtr.Size))).ToArray();
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    public string GetImagePath(int processId)
+    {
+        if (!GetProcessIds().Contains(processId)) throw new InvalidOperationException("The process is not in the owned job.");
+        using var handle = OpenProcess(0x1000, false, (uint)processId);
+        if (handle.IsInvalid) throw new Win32Exception();
+        var size = 32768u;
+        var image = new StringBuilder((int)size);
+        if (!QueryFullProcessImageNameW(handle, 0, image, ref size)) throw new Win32Exception();
+        return image.ToString();
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        if (_disposed) return;
+        if (!TerminateJobObject(_job, 0)) throw new Win32Exception();
+        var deadline = Stopwatch.StartNew();
+        while (GetProcessIds().Count > 0)
+        {
+            if (deadline.Elapsed > TimeSpan.FromSeconds(10)) throw new TimeoutException("Owned AI processes did not exit.");
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(40, cancellationToken).ConfigureAwait(false);
+        }
+        await Task.WhenAll(_readers).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task WaitForExitAsync(CancellationToken cancellationToken)
+    {
+        while (!HasExited) await Task.Delay(30, cancellationToken).ConfigureAwait(false);
+        await Task.WhenAll(_readers).WaitAsync(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task DrainAsync(StreamReader reader)
+    {
+        // Fixed-size reads bound memory even if a child emits a line without a newline.
+        var buffer = new char[2048];
+        try
+        {
+            int count;
+            while ((count = await reader.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+            {
+                lock (_diagnostics)
+                {
+                    _diagnostics.Enqueue(new string(buffer, 0, count));
+                    while (_diagnostics.Count > 64) _diagnostics.Dequeue();
+                }
+            }
+        }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+    }
 }

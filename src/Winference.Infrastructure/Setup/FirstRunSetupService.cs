@@ -358,4 +358,39 @@ public sealed class FirstRunSetupService : ISetupService
         { throw new RuntimeException("driver_timeout", "The NPU driver check took too long. Check the driver installation and retry."); }
         finally { await StopPullAsync(owned).ConfigureAwait(false); }
     }
+
+    private async Task StopPullAsync(OwnedProcessSession owned)
+    {
+        await _pullCleanup.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            lock (_sync) if (!ReferenceEquals(_pull, owned)) return;
+            await owned.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            owned.Dispose();
+            lock (_sync) if (ReferenceEquals(_pull, owned)) _pull = null;
+        }
+        finally { _pullCleanup.Release(); }
+    }
+
+    private async Task<T> RunOperationAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken token)
+    {
+        CancellationTokenSource cancellation;
+        TaskCompletionSource completion;
+        lock (_sync)
+        {
+            if (_activeCompletion is not null) throw new RuntimeException("setup_busy", "Wait for the current setup operation to finish or cancel it.");
+            cancellation = _activeCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+            completion = _activeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        try { return await operation(cancellation.Token).ConfigureAwait(false); }
+        finally
+        {
+            lock (_sync)
+            {
+                if (ReferenceEquals(_activeCompletion, completion)) { _activeCompletion = null; _activeCancellation = null; }
+            }
+            completion.TrySetResult();
+            cancellation.Dispose();
+        }
+    }
 }

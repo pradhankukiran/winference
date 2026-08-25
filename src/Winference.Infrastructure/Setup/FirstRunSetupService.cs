@@ -287,4 +287,75 @@ public sealed class FirstRunSetupService : ISetupService
         if (!File.Exists(marker)) File.WriteAllText(marker, "Winference model store, schema 1");
         return root;
     }
+
+    private async Task PullModelAsync(string runtime, string root, CatalogModel model, IProgress<SetupProgress> progress, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        var modelDirectory = Path.Combine(root, "models", model.DirectoryName);
+        if (Directory.Exists(modelDirectory) && new DirectoryInfo(modelDirectory).Attributes.HasFlag(FileAttributes.ReparsePoint))
+            throw new RuntimeException("model_store_link", "Choose a regular app-owned model directory for this download.");
+        var required = model.StorageBytes;
+        var drive = new DriveInfo(Path.GetPathRoot(root)!);
+        if (required is { } bytes && drive.AvailableFreeSpace < bytes + 256L * 1024 * 1024)
+            throw new RuntimeException("storage_full", "There is not enough free storage for this model. Choose another location or free some space.");
+        var environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
+            .ToDictionary(item => (string)item.Key, item => (string)item.Value!, StringComparer.OrdinalIgnoreCase);
+        environment["FLM_MODEL_PATH"] = root;
+        environment["PATH"] = Path.GetDirectoryName(runtime) + ";" + environment.GetValueOrDefault("PATH", "");
+        var owned = OwnedProcessSession.Start(runtime, ["pull", model.Id], Path.GetDirectoryName(runtime)!, environment);
+        lock (_sync) _pull = owned;
+        try
+        {
+            while (!owned.HasExited)
+            {
+                token.ThrowIfCancellationRequested();
+                long completed = 0;
+                foreach (var file in model.Files)
+                {
+                    var destination = Path.Combine(modelDirectory, file.Name);
+                    var partial = destination + ".part";
+                    try { completed += Math.Min(file.LengthBytes, File.Exists(destination) ? new FileInfo(destination).Length : File.Exists(partial) ? new FileInfo(partial).Length : 0); }
+                    catch (IOException) { }
+                }
+                progress.Report(new("DownloadingModel", $"Downloading {model.DisplayName}…", required is null ? null : completed, required));
+                await Task.Delay(250, token).ConfigureAwait(false);
+            }
+            await owned.WaitForExitAsync(token).ConfigureAwait(false);
+            if (owned.ExitCode != 0)
+                throw new RuntimeException("model_download", "The model download did not finish. Completed files and app-owned partial files were kept; Retry can resume supported transfers.");
+        }
+        finally
+        {
+            await StopPullAsync(owned).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ValidateNpuAsync(string runtime, IProgress<SetupProgress> progress, CancellationToken token)
+    {
+        progress.Report(new("CheckingDriver", "Checking the AMD NPU and its driver before any model download…"));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        var environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
+            .ToDictionary(item => (string)item.Key, item => (string)item.Value!, StringComparer.OrdinalIgnoreCase);
+        environment["FLM_MODEL_PATH"] = _paths.DefaultModelStore;
+        deadline.Token.ThrowIfCancellationRequested();
+        var owned = OwnedProcessSession.Start(runtime, ["validate", "--json"], Path.GetDirectoryName(runtime)!, environment);
+        lock (_sync) _pull = owned;
+        try
+        {
+            await owned.WaitForExitAsync(deadline.Token).ConfigureAwait(false);
+            var text = string.Concat(owned.Diagnostics);
+            var first = text.IndexOf('{'); var last = text.LastIndexOf('}');
+            if (first < 0 || last < first)
+                throw new RuntimeException("driver_check", "The AI component could not check this NPU. Check its installation and retry.");
+            using var document = JsonDocument.Parse(text[first..(last + 1)]);
+            if (!document.RootElement.TryGetProperty("ready", out var ready) || ready.ValueKind != JsonValueKind.True ||
+                !document.RootElement.TryGetProperty("amd_device_found", out var found) || found.ValueKind != JsonValueKind.True ||
+                document.RootElement.GetProperty("npu_platform").GetString() != "aie2p")
+                throw new RuntimeException("driver_unavailable", "The AMD NPU or its driver is not ready. Install the supported driver, restart if requested, and retry setup.");
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        { throw new RuntimeException("driver_timeout", "The NPU driver check took too long. Check the driver installation and retry."); }
+        finally { await StopPullAsync(owned).ConfigureAwait(false); }
+    }
 }

@@ -175,4 +175,62 @@ public sealed class FirstRunSetupService : ISetupService
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or KeyNotFoundException or InvalidOperationException or ArgumentException)
         { throw new RuntimeException("setup_state", "The saved model information could not be read. Choose your model again; existing files were preserved.", error); }
     }
+
+    private async Task ActivateCoreAsync(PreparedModel prepared, IProgress<SetupProgress> progress, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        lock (_sync)
+        {
+            if (!ReferenceEquals(prepared, _prepared) || !ReferenceEquals(prepared.Broker, _broker))
+                throw new RuntimeException("setup_identity", "The selected model changed. Choose it again before loading.");
+        }
+        progress.Report(new("Checking", $"Checking {prepared.Model.DisplayName} before loading…"));
+        var hardware = await _hardware(token).ConfigureAwait(false);
+        if (!hardware.NpuDetected || hardware.BlockingReason is not null)
+            throw new RuntimeException("hardware_unavailable", hardware.BlockingReason ?? "A supported AMD NPU is required by this build.");
+        var catalog = FlmModelCatalog.Load(_paths.CatalogPath, _paths.ModelInfoPath);
+        var candidate = catalog.Discover([], true, hardware.MemoryBytes).SingleOrDefault(m => m.Id == prepared.Model.Id)
+            ?? throw new RuntimeException("model_unknown", "The selected model is no longer available in this build. Choose another model.");
+        if (!candidate.CanSelect) throw new RuntimeException("model_unavailable", candidate.UnavailableReason!);
+        using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(prepared.ManifestPath, token).ConfigureAwait(false));
+        var runtime = manifest.RootElement.GetProperty("setupRuntimePath").GetString()!;
+        var trustedPaths = _paths with { RuntimeCandidates = [runtime] };
+        var trusted = await PinnedRuntimeAcquisition.FindTrustedRuntimeAsync(trustedPaths, token).ConfigureAwait(false);
+        if (trusted is null || !string.Equals(Path.GetFullPath(trusted), Path.GetFullPath(runtime), StringComparison.OrdinalIgnoreCase))
+            throw new RuntimeException("runtime_mismatch", "The saved AI component is missing or changed. Choose a model to review its setup requirements.");
+        await ValidateNpuAsync(runtime, progress, token).ConfigureAwait(false);
+        progress.Report(new("Preparing", $"Loading {prepared.Model.DisplayName} on the NPU…"));
+        // The existing backend rechecks the complete model/runtime hashes and proves the owned NPU route.
+        await prepared.Broker.StartAsync(prepared.Profile, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+    }
+
+    public async Task SaveAsync(PreparedModel prepared, CancellationToken cancellationToken = default)
+    {
+        if (_activeCompletion is not null || !ReferenceEquals(prepared, _prepared) || prepared.Broker.Snapshot is not { State: RuntimeState.Ready, Session: { } session } ||
+            session.Profile != prepared.Profile || !File.Exists(prepared.ManifestPath))
+            throw new RuntimeException("setup_unverified", "The selected model has not finished verification. Setup was not saved.");
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(prepared.ManifestPath, cancellationToken).ConfigureAwait(false));
+        var configuration = document.RootElement;
+        var runtime = configuration.GetProperty("setupRuntimePath").GetString()!;
+        var modelRoot = configuration.GetProperty("setupModelRoot").GetString()!;
+        await AtomicJson.WriteAsync(_paths.SettingsPath, new RememberedSetup(prepared.Model.Id, prepared.ManifestPath,
+            prepared.Profile.ContextLength, prepared.Profile.ExecutionMode, runtime, modelRoot), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        CancellationTokenSource? cancellation;
+        Task? operation;
+        OwnedProcessSession? pull;
+        RuntimeBroker? broker;
+        lock (_sync) { cancellation = _activeCancellation; operation = _activeCompletion?.Task; pull = _pull; broker = _broker; }
+        try { cancellation?.Cancel(); } catch (ObjectDisposedException) { }
+        if (pull is not null) await StopPullAsync(pull).ConfigureAwait(false);
+        if (broker is not null) await broker.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        if (operation is not null) await operation.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
+        lock (_sync) { pull = _pull; broker = _broker; }
+        if (pull is not null) await StopPullAsync(pull).ConfigureAwait(false);
+        if (broker is not null) await broker.StopAsync(CancellationToken.None).ConfigureAwait(false);
+    }
 }

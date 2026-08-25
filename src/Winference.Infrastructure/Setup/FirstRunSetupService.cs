@@ -233,4 +233,58 @@ public sealed class FirstRunSetupService : ISetupService
         if (pull is not null) await StopPullAsync(pull).ConfigureAwait(false);
         if (broker is not null) await broker.StopAsync(CancellationToken.None).ConfigureAwait(false);
     }
+
+    private async Task<PreparedModel> OpenDescriptorAsync(SetupModel model, string manifest, string runtime, string modelRoot)
+    {
+        RuntimeBroker? previous;
+        lock (_sync) previous = _broker;
+        if (previous is not null)
+        {
+            if (previous.Snapshot.State is not (RuntimeState.Idle or RuntimeState.Error))
+                throw new RuntimeException("setup_busy", "Stop the current model before choosing another model.");
+            await previous.DisposeAsync().ConfigureAwait(false);
+        }
+        var installation = new RuntimeInstallation(manifest, _paths.LemonadePath, runtime, modelRoot, _paths.SessionsRoot);
+        installation.Profile.Validate();
+        var broker = new RuntimeBroker(new LemonadeBackend(installation));
+        var prepared = new PreparedModel(model, installation.Profile, broker, manifest);
+        lock (_sync) { _broker = broker; _prepared = prepared; }
+        return prepared;
+    }
+
+    private async Task<string> WriteManifestAsync(CatalogModel model, string runtime, string modelRoot, IReadOnlyList<VerifiedModelFile> files,
+        int context, CancellationToken token)
+    {
+        if (!File.Exists(_paths.LemonadePath) || await PinnedRuntimeAcquisition.HashAsync(_paths.LemonadePath, token).ConfigureAwait(false) != PinnedRuntimeAcquisition.LemonadeExeSha256)
+            throw new RuntimeException("missing_runtime", "The bundled AI supervisor is missing or changed. Restore the full Winference application folder.");
+        var identity = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(files, AtomicJson.Options)));
+        var profile = model.Id.Replace(':', '-') + "-flm1.0.10-npu-ctx" + context + "-" + identity[..12];
+        var path = Path.Combine(_paths.DataRoot, "Manifests", profile, "model.json");
+        var manifest = new
+        {
+            schemaVersion = 1, modelFamilyId = model.Id, profileId = profile, artifactId = "sha256:" + identity,
+            providerModelId = model.ProviderId, checkpoint = model.Id, executionMode = "NpuOnly", contextLength = context,
+            maxOutputTokens = Math.Min(256, context / 4), modelDirectory = model.DirectoryName, modelFiles = files,
+            flmVersion = "1.0.10", flmExecutableSha256 = await PinnedRuntimeAcquisition.HashAsync(runtime, token).ConfigureAwait(false),
+            lemonadeVersion = "2026.42.1", lemonadeExecutableSha256 = PinnedRuntimeAcquisition.LemonadeExeSha256,
+            modelName = model.DisplayName, publisher = model.Publisher, supportsImages = model.SupportsImages,
+            tokenizerPolicy = files.Any(f => string.Equals(f.Name, "tokenizer.json", StringComparison.OrdinalIgnoreCase)) ? "local-exact" : "estimate",
+            catalogRevision = FlmModelCatalog.Revision,
+            setupRuntimePath = runtime, setupModelRoot = modelRoot
+        };
+        await AtomicJson.WriteAsync(path, manifest, token).ConfigureAwait(false);
+        return path;
+    }
+
+    private string ValidateOwnedStore(string requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested)) requested = _paths.DefaultModelStore;
+        var root = Path.GetFullPath(requested);
+        var marker = Path.Combine(root, ".winference-owned-store");
+        if (Directory.Exists(root) && !File.Exists(marker) && Directory.EnumerateFileSystemEntries(root).Any())
+            throw new RuntimeException("external_store", "Choose an empty folder or a Winference-owned model store. Existing external files will not be modified.");
+        Directory.CreateDirectory(root);
+        if (!File.Exists(marker)) File.WriteAllText(marker, "Winference model store, schema 1");
+        return root;
+    }
 }

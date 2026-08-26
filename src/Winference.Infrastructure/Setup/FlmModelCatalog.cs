@@ -71,4 +71,71 @@ public sealed class FlmModelCatalog
         }
         return new(models.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray());
     }
+
+    public IReadOnlyList<SetupModel> Discover(IReadOnlyList<string> roots, bool npuDetected, long memoryBytes = 0)
+    {
+        return Models.Select(model =>
+        {
+            var complete = roots.FirstOrDefault(root => HasCompleteFiles(root, model));
+            var incomplete = complete is null && roots.Any(root => Directory.Exists(Path.Combine(root, "models", model.DirectoryName)));
+            return new SetupModel(model.Id, model.DisplayName, model.Publisher, model.Description,
+                complete is null ? model.StorageBytes : 0, model.StorageBytes,
+                complete is not null ? "Installed" : incomplete ? "Incomplete" : "Not installed",
+                complete, model.UnavailableReason ?? (!npuDetected ? "A supported AMD NPU is required by this build." :
+                    memoryBytes > 0 && model.StorageBytes is { } size && size > memoryBytes ? "This model's files exceed this computer's installed memory. Choose a smaller model." : null),
+                model.ContextLength, Math.Min(model.ContextLength, 4096), Revision);
+        }).OrderByDescending(m => m.IsInstalled).ThenBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    public static bool HasCompleteFiles(string root, CatalogModel model)
+    {
+        try
+        {
+            return model.Files.Count > 0 && model.Files.All(file =>
+            {
+                var path = Path.Combine(root, "models", model.DirectoryName, file.Name);
+                return File.Exists(path) && new FileInfo(path).Length == file.LengthBytes;
+            });
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    public static async Task<IReadOnlyList<VerifiedModelFile>> VerifyFilesAsync(string root, CatalogModel model,
+        IProgress<SetupProgress>? progress, CancellationToken token)
+    {
+        var result = new List<VerifiedModelFile>();
+        foreach (var file in model.Files)
+        {
+            token.ThrowIfCancellationRequested();
+            var path = Path.Combine(root, "models", model.DirectoryName, file.Name);
+            if (!File.Exists(path) || new FileInfo(path).Length != file.LengthBytes)
+                throw new RuntimeException("model_incomplete", "The selected model is incomplete. Existing files were left alone; choose an app-owned download location to retry.");
+            progress?.Report(new("CheckingFiles", $"Verifying {file.Name}…"));
+            await using var input = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            using var git = file.GitBlobSha1 is not null ? IncrementalHash.CreateHash(HashAlgorithmName.SHA1) : null;
+            git?.AppendData(Encoding.UTF8.GetBytes($"blob {input.Length}\0"));
+            var buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = await input.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+            { sha.AppendData(buffer, 0, read); git?.AppendData(buffer, 0, read); }
+            var digest = Convert.ToHexStringLower(sha.GetHashAndReset());
+            if ((file.Sha256 is not null && digest != file.Sha256) ||
+                (file.GitBlobSha1 is not null && Convert.ToHexStringLower(git!.GetHashAndReset()) != file.GitBlobSha1))
+                throw new RuntimeException("model_integrity", "The selected model differs from its supplier checksum. It has not been loaded or modified.");
+            result.Add(new(file.Name, file.LengthBytes, digest));
+        }
+        return result;
+    }
+
+    private static bool IsSafeRelativeFile(string file) => !Path.IsPathRooted(file) && !file.Contains('\\') && !file.Contains(':') &&
+        file.Split('/').All(part => part.Length > 0 && part is not "." and not "..");
+    private static bool IsHash(string value, int length) => value.Length == length && value.All(Uri.IsHexDigit);
+    private static string? String(JsonElement element, string key) => element.ValueKind == JsonValueKind.Object && element.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    private static bool Bool(JsonElement element, string key) => element.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.True;
+    private static string[] Strings(JsonElement element, string key) => element.TryGetProperty(key, out var values) && values.ValueKind == JsonValueKind.Array
+        ? values.EnumerateArray().Where(v => v.ValueKind == JsonValueKind.String).Select(v => v.GetString()!).ToArray() : [];
 }
+
+public sealed record VerifiedModelFile(string Name, long LengthBytes, string Sha256);

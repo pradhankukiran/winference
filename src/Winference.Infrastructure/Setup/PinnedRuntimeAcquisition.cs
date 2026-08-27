@@ -95,4 +95,81 @@ public static class PinnedRuntimeAcquisition
             if (Directory.Exists(staging)) Directory.Delete(staging, true);
         }
     }
+
+    public static async Task DownloadVerifiedAsync(HttpClient client, Uri source, string destination,
+        long expectedLength, string expectedSha256, IProgress<SetupProgress> progress, CancellationToken token,
+        string subject = "local AI component")
+    {
+        if (File.Exists(destination) && new FileInfo(destination).Length == expectedLength &&
+            await HashAsync(destination, token).ConfigureAwait(false) == expectedSha256) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var partial = destination + ".part";
+        var offset = File.Exists(partial) ? new FileInfo(partial).Length : 0;
+        if (offset >= expectedLength && offset > 0)
+        {
+            if (offset == expectedLength && await HashAsync(partial, token).ConfigureAwait(false) == expectedSha256)
+            { token.ThrowIfCancellationRequested(); File.Move(partial, destination, true); return; }
+            File.Delete(partial); offset = 0;
+        }
+        using var request = new HttpRequestMessage(HttpMethod.Get, source);
+        if (offset > 0) request.Headers.Range = new RangeHeaderValue(offset, null);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        if (response.StatusCode != HttpStatusCode.OK && response.StatusCode != HttpStatusCode.PartialContent)
+            throw new RuntimeException("download_failed", $"The {subject} could not be downloaded. Check the connection and retry.");
+        if (response.StatusCode == HttpStatusCode.OK) offset = 0;
+        else if (response.Content.Headers.ContentRange?.From != offset || response.Content.Headers.ContentRange?.Length != expectedLength)
+            throw new RuntimeException("download_range", "The download server returned an unexpected resume range. Retry the download.");
+        await using (var target = new FileStream(partial, offset == 0 ? FileMode.Create : FileMode.Append, FileAccess.Write, FileShare.Read, 81920, FileOptions.Asynchronous))
+        await using (var input = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
+        {
+            var buffer = new byte[81920];
+            var transferred = offset;
+            progress.Report(new("DownloadingRuntime", $"Downloading the {subject}…", transferred, expectedLength));
+            int read;
+            while (true)
+            {
+                using var stall = CancellationTokenSource.CreateLinkedTokenSource(token);
+                stall.CancelAfter(TimeSpan.FromSeconds(60));
+                try { read = await input.ReadAsync(buffer, stall.Token).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                { throw new RuntimeException("download_stalled", $"The {subject} download stopped responding. Check the connection and retry."); }
+                if (read == 0) break;
+                transferred += read;
+                if (transferred > expectedLength) throw new RuntimeException("download_size", $"The download was larger than the verified {subject}. It was not kept.");
+                await target.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
+                progress.Report(new("DownloadingRuntime", $"Downloading the {subject}…", transferred, expectedLength));
+            }
+        }
+        progress.Report(new("VerifyingRuntime", $"Verifying the {subject} download…"));
+        if (new FileInfo(partial).Length != expectedLength || await HashAsync(partial, token).ConfigureAwait(false) != expectedSha256)
+            throw new RuntimeException("download_integrity", $"The {subject} download did not match its published checksum. It was not kept.");
+        token.ThrowIfCancellationRequested();
+        File.Move(partial, destination, true);
+    }
+
+    public static async Task<string> HashAsync(string path, CancellationToken token)
+    {
+        await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(file, token).ConfigureAwait(false));
+    }
+
+    private static async Task<bool> IsVerifiedPortableAsync(SetupPaths paths, string executable, string hash, CancellationToken token)
+    {
+        var manifest = Path.Combine(paths.RuntimeDirectory, "winference-runtime.json");
+        if (!File.Exists(manifest) || !Path.GetFullPath(executable).StartsWith(paths.RuntimeDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            var state = await AtomicJson.ReadAsync<VerifiedRuntime>(manifest, token).ConfigureAwait(false);
+            if (state?.ArchiveSha256 != ArchiveSha256 || !state.Files.TryGetValue(Path.GetRelativePath(paths.RuntimeDirectory, executable), out var expected) || hash != expected) return false;
+            foreach (var file in state.Files)
+            {
+                var path = Path.GetFullPath(Path.Combine(paths.RuntimeDirectory, file.Key));
+                if (!path.StartsWith(paths.RuntimeDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                    !File.Exists(path) || await HashAsync(path, token).ConfigureAwait(false) != file.Value) return false;
+            }
+            return true;
+        }
+        catch (System.Text.Json.JsonException) { return false; }
+    }
+    private sealed record VerifiedRuntime(string ArchiveSha256, Dictionary<string, string> Files);
 }

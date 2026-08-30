@@ -94,4 +94,71 @@ public sealed class GpuModelDownloadService
         }
         finally { gate.Release(); }
     }
+
+    private async Task<GpuModelRegistration> RegisterAsync(GpuCatalogModel model, string destination,
+        IProgress<DownloadProgress>? progress, CancellationToken token)
+    {
+        progress?.Report(new(DownloadState.Verifying, "Reading the model header and rechecking its identity…", 0, model.LengthBytes));
+        var registration = await _registrations.RegisterAsync(destination, new SetupProgressSink(progress), token).ConfigureAwait(false);
+        if (registration.Sha256 != model.Sha256 || registration.LengthBytes != model.LengthBytes)
+            throw new RuntimeException("download_integrity", "The downloaded model does not match the approved catalog identity. It was not registered.");
+        progress?.Report(new(DownloadState.Completed, $"{model.DisplayName} is verified and registered for GPU use.", model.LengthBytes, model.LengthBytes));
+        return registration;
+    }
+
+    private void CheckFreeSpace(string destination, long remaining)
+    {
+        if (remaining <= 0) return;
+        var root = Path.GetPathRoot(destination);
+        if (string.IsNullOrEmpty(root)) return;
+        try
+        {
+            var drive = new DriveInfo(root);
+            if (drive.AvailableFreeSpace < remaining + VerificationHeadroomBytes)
+                throw new RuntimeException("storage_full", "There is not enough free storage for this model. Choose another Winference data folder or free some space.");
+        }
+        catch (Exception error) when (error is ArgumentException or IOException or UnauthorizedAccessException)
+        { throw new RuntimeException("storage_unavailable", "The download location's free space could not be checked. Choose a regular local folder and retry.", error); }
+    }
+
+    private void EnsureOwnedDirectory()
+    {
+        var models = Path.Combine(_dataRoot, "Models");
+        var gpu = Path.Combine(models, "Gpu");
+        foreach (var directory in new[] { models, gpu })
+        {
+            if (!Directory.Exists(directory)) continue;
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new RuntimeException("download_destination", "The app-owned model folder is a linked entry. Choose a regular Winference data folder.");
+        }
+    }
+
+    private void EnsureNoLinkedParents(string destination)
+    {
+        var full = Path.GetFullPath(destination);
+        if (!full.StartsWith(_dataRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new RuntimeException("download_destination", "The download destination is outside this app's data folder.");
+        for (var directory = new DirectoryInfo(Path.GetDirectoryName(full)!); directory is not null; directory = directory.Parent)
+        {
+            if (!directory.Exists) continue;
+            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new RuntimeException("download_destination", "The app-owned download path contains a linked folder. Choose a regular Winference data folder.");
+            if (string.Equals(directory.FullName, _dataRoot, StringComparison.OrdinalIgnoreCase)) break;
+        }
+    }
+
+    private sealed class SetupProgressSink(IProgress<DownloadProgress>? target) : IProgress<SetupProgress>
+    {
+        public void Report(SetupProgress value)
+        {
+            var state = value.Stage switch
+            {
+                "DownloadingRuntime" => DownloadState.Downloading,
+                "VerifyingRuntime" => DownloadState.Verifying,
+                "InspectingGguf" or "VerifyingGguf" or "GgufRegistered" => DownloadState.Verifying,
+                _ => DownloadState.Preparing
+            };
+            target?.Report(new(state, value.Message, value.CompletedBytes, value.TotalBytes));
+        }
+    }
 }

@@ -100,5 +100,72 @@ public sealed class ModelLibraryService
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (Exception error) { notices.Add(Message(error, "NPU model information could not be checked.")); }
         }
+
+        try { gpuModels = await _gpuModels.ReadRegisteredAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error) { notices.Add(Message(error, "Registered GPU models could not be checked.")); }
+
+        try { hybridModels = await _hybridModels.ReadRegisteredAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception error) { notices.Add(Message(error, "Registered GPU + NPU models could not be checked.")); }
+
+        AddGpuCatalog(families, gpuModels);
+        AddRegisteredGpu(families, gpuModels);
+        if (inspection is not null) AddFlm(families, inspection);
+        AddHybrid(families, hybridModels, inspection);
+        AddHybridImport(families);
+
+        var summary = inspection is null
+            ? "Hardware details unavailable."
+            : string.Join(" · ", new[]
+            {
+                inspection.Processor,
+                inspection.MemoryBytes > 0 ? $"{inspection.MemoryBytes / 1_073_741_824d:0.#} GB memory" : "",
+                inspection.NpuDetected ? "AMD NPU detected" : "AMD NPU not detected"
+            }.Where(value => !string.IsNullOrWhiteSpace(value)));
+
+        var ordered = families.Values
+            .Select(builder => new LibraryFamily(builder.Family, builder.Profiles
+                .OrderBy(profile => profile.ExecutionMode)
+                .ThenBy(profile => profile.Compatibility.State)
+                .ThenBy(profile => profile.ProfileId, StringComparer.Ordinal)
+                .ToArray()))
+            .OrderBy(family => family.Family.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (var family in ordered) family.Validate();
+        return new(ordered, summary, notices.Count == 0 ? null : string.Join(" ", notices.Distinct(StringComparer.Ordinal)));
+    }
+
+    private void AddGpuCatalog(Dictionary<string, FamilyBuilder> families,
+        IReadOnlyList<GpuModelRegistration> registrations)
+    {
+        foreach (var entry in GpuCatalog.Models)
+        {
+            var registered = registrations.FirstOrDefault(model => model.Sha256 == entry.Sha256);
+            var usable = registered is not null && IsUsable(registered);
+            var destination = _downloads.DestinationFor(entry);
+            var downloaded = File.Exists(destination) && new FileInfo(destination).Length == entry.LengthBytes;
+            var partial = !downloaded && File.Exists(destination + ".part") ? new FileInfo(destination + ".part").Length : 0;
+            var state = usable ? ModelAvailability.Installed : ModelAvailability.DownloadRequired;
+            var summary = usable ? "Verified GGUF is registered for GPU use."
+                : registered is not null ? "A registration points to a missing or changed file. Download the approved file again."
+                : downloaded ? "An approved file is already downloaded. Verify and add it."
+                : partial > 0 ? $"A partial download is present ({partial / 1_000_000_000d:0.00} GB of {entry.LengthBytes / 1_000_000_000d:0.00} GB). Resume to finish it."
+                : "Approved GPU download. No model files are present.";
+            var artifact = entry.Artifact;
+            var profile = new LibraryProfile(
+                registered?.Profile.ProfileId ?? entry.ProfileId, ExecutionMode.GpuOnly,
+                usable ? "Vulkan llama.cpp + ODS bridge" : "Vulkan llama.cpp",
+                artifact, new(state, summary),
+                usable ? 0 : entry.LengthBytes, entry.LengthBytes,
+                usable ? registered!.ModelPath : downloaded ? destination : null,
+                usable, !usable, false,
+                usable
+                    ? "Registered GGUF: header, full-file SHA-256 and file identity verified. GPU device qualification happens when it loads."
+                    : registered is not null
+                        ? "Registration metadata exists, but the file is missing or its size changed. Nothing was moved or deleted. Download again or choose the file."
+                        : "Approved mapping from the attributed ODS catalog. The file hash is pinned; execution is not yet qualified on this PC.");
+            Get(families, entry.Family).Add(profile);
+        }
     }
 }

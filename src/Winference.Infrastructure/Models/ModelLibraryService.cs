@@ -50,4 +50,55 @@ public sealed class ModelLibraryService
         _downloads = new GpuModelDownloadService(paths.DataRoot, gpuModels, http);
         _removal = new ModelRemovalService(paths, gpuModels, GpuCatalog);
     }
+
+    public GpuModelCatalog GpuCatalog { get; }
+    public DownloadCapabilities DownloadCapabilities => GpuModelDownloadService.Capabilities;
+    public string DestinationFor(GpuCatalogModel model) => _downloads.DestinationFor(model);
+
+    public async Task<GpuModelRegistration> DownloadGpuAsync(GpuCatalogModel model,
+        IProgress<DownloadProgress>? progress, CancellationToken cancellationToken = default)
+    {
+        await _mutations.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await _downloads.DownloadAsync(model, progress, cancellationToken).ConfigureAwait(false); }
+        finally { _mutations.Release(); }
+    }
+
+    public bool CanRemove(LibraryProfile profile) => _removal.CanRemove(profile);
+
+    public async Task<ModelRemovalPlan> PlanRemovalAsync(LibraryProfile profile, CancellationToken token = default)
+    {
+        await _mutations.WaitAsync(token).ConfigureAwait(false);
+        try { return await _removal.PlanAsync(profile, token).ConfigureAwait(false); }
+        finally { _mutations.Release(); }
+    }
+
+    public async Task<ModelRemovalResult> RemoveAsync(ModelRemovalPlan plan, CancellationToken token = default)
+    {
+        await _mutations.WaitAsync(token).ConfigureAwait(false);
+        try { return await _removal.RemoveAsync(plan, token).ConfigureAwait(false); }
+        finally { _mutations.Release(); }
+    }
+
+    public Task<ModelLibrarySnapshot> InspectAsync(CancellationToken cancellationToken = default) =>
+        InspectCoreAsync(null, cancellationToken);
+
+    /// <summary>Reuse an inspection the caller already performed instead of probing hardware twice.</summary>
+    public Task<ModelLibrarySnapshot> InspectAsync(SetupInspection inspection, CancellationToken cancellationToken = default) =>
+        InspectCoreAsync(inspection ?? throw new ArgumentNullException(nameof(inspection)), cancellationToken);
+
+    private async Task<ModelLibrarySnapshot> InspectCoreAsync(SetupInspection? provided, CancellationToken cancellationToken)
+    {
+        var families = new Dictionary<string, FamilyBuilder>(StringComparer.Ordinal);
+        var notices = new List<string>();
+        var inspection = provided;
+        IReadOnlyList<GpuModelRegistration> gpuModels = [];
+        IReadOnlyList<HybridModelRegistration> hybridModels = [];
+
+        if (inspection is null)
+        {
+            try { inspection = await _setup.InspectAsync(cancellationToken).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception error) { notices.Add(Message(error, "NPU model information could not be checked.")); }
+        }
+    }
 }

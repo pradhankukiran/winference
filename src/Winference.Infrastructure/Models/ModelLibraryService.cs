@@ -168,4 +168,89 @@ public sealed class ModelLibraryService
             Get(families, entry.Family).Add(profile);
         }
     }
+
+    private void AddRegisteredGpu(Dictionary<string, FamilyBuilder> families,
+        IReadOnlyList<GpuModelRegistration> registrations)
+    {
+        foreach (var model in registrations)
+        {
+            if (GpuCatalog.Models.Any(entry => entry.Sha256 == model.Sha256)) continue;
+            var family = FamilyForLocalGguf(model);
+            var usable = IsUsable(model);
+            var profile = new LibraryProfile(
+                model.Profile.ProfileId, ExecutionMode.GpuOnly, "Vulkan llama.cpp + ODS bridge",
+                new("sha256:" + model.Sha256, family, ModelArtifactFormat.Gguf,
+                    model.Metadata.Quantization, "User-selected GGUF", "sha256:" + model.Sha256,
+                    model.LengthBytes, model.Sha256, "Vulkan llama.cpp"),
+                usable
+                    ? new(ModelAvailability.Installed, "Verified GGUF is registered for GPU use.")
+                    : new(ModelAvailability.Unavailable,
+                        "The registered GGUF file is missing or its size changed. It was not moved or deleted.",
+                        "Choose the GGUF file again to repair this registration; its file is missing or changed. Your chats were kept."),
+                0, model.LengthBytes, model.ModelPath, usable, false, false,
+                usable
+                    ? $"Registered GGUF: {model.Metadata.Architecture}, {model.Metadata.Quantization}, SHA-256 verified in place."
+                    : "Registration metadata exists, but its file is missing or changed. No model file was modified.");
+            Get(families, family).Add(profile);
+        }
+    }
+
+    private static void AddFlm(Dictionary<string, FamilyBuilder> families, SetupInspection inspection)
+    {
+        foreach (var model in inspection.Models)
+        {
+            var familyId = FlmFamilyId(model.Id);
+            var family = KnownFamily(familyId) ?? new ModelFamily(familyId, model.DisplayName,
+                model.Publisher, model.Description);
+            var installed = model.IsInstalled;
+            var unavailable = model.UnavailableReason;
+            var state = unavailable is not null ? ModelAvailability.Unavailable
+                : installed ? ModelAvailability.Installed
+                : ModelAvailability.DownloadRequired;
+            var summary = state switch
+            {
+                ModelAvailability.Installed => "Installed NPU package. Existing files are reused in place.",
+                ModelAvailability.DownloadRequired when model.InstallationState == "Incomplete" =>
+                    "Incomplete NPU files found. The pinned FastFlowLM download can resume.",
+                ModelAvailability.DownloadRequired => "Available through the pinned FastFlowLM download.",
+                _ => unavailable ?? "This NPU package is unavailable."
+            };
+            var profile = new LibraryProfile(
+                $"flm-{model.Id.Replace(':', '-')}-ctx{model.SuggestedContextLength}", ExecutionMode.NpuOnly,
+                "Lemonade 2026.42.1 + FastFlowLM 1.0.10",
+                new("flm:" + model.Id, family, ModelArtifactFormat.FastFlowLm, "FastFlowLM package",
+                    "FastFlowLM 1.0.10 catalog", model.CatalogRevision, model.StorageBytes, null,
+                    "Lemonade + FastFlowLM 1.0.10"),
+                new(state, summary, unavailable),
+                installed ? 0 : model.DownloadBytes, model.StorageBytes, model.ExistingModelRoot,
+                state == ModelAvailability.Installed, state == ModelAvailability.DownloadRequired, false,
+                "FastFlowLM catalog entry with supplier file sizes. Local NPU answer quality is not implied.");
+            Get(families, family).Add(profile);
+        }
+    }
+
+    private static void AddHybrid(Dictionary<string, FamilyBuilder> families,
+        IReadOnlyList<HybridModelRegistration> registrations, SetupInspection? inspection)
+    {
+        foreach (var model in registrations)
+        {
+            var family = FamilyForHybrid(model);
+            var canExecute = HybridModelService.CanExecute(model);
+            var reason = !canExecute ? HybridModelService.ExecutionStatus(model)
+                : inspection is null ? "AMD NPU support could not be checked."
+                : !inspection.NpuDetected ? "A supported AMD NPU is required for GPU + NPU execution."
+                : null;
+            var state = reason is null ? ModelAvailability.Installed : ModelAvailability.Unavailable;
+            var profile = new LibraryProfile(
+                model.Profile.ProfileId, ExecutionMode.GpuNpu, "AMD Ryzen AI 1.7 hybrid worker",
+                new("sha256:" + model.Sha256, family, ModelArtifactFormat.RyzenAiHybrid, "1.7",
+                    model.RepositoryId is { Length: > 0 } repository ? repository : model.ModelDirectory,
+                    model.Revision is { Length: > 0 } revision ? revision : "sha256:" + model.Sha256,
+                    model.LengthBytes, model.Sha256, "AMD Ryzen AI 1.7 hybrid worker"),
+                new(state, reason ?? "Verified GPU + NPU files are registered and reused in place.", reason),
+                0, model.LengthBytes, model.ModelDirectory, state == ModelAvailability.Installed, false, false,
+                reason ?? "Registered GPU + NPU export: every top-level file hashed, genai_config.json validated. Device readiness is checked when it loads.");
+            Get(families, family).Add(profile);
+        }
+    }
 }

@@ -321,4 +321,33 @@ public sealed class ModelLibraryService
         return new ModelFamily("local-gguf-" + model.Sha256[..12], model.DisplayName, "Local GGUF",
             $"{model.Metadata.Architecture} GGUF registered from a user-selected file.");
     }
+
+    private static bool IsUsable(GpuModelRegistration model) => GpuModelService.IsFilePresent(model);
+
+    private static string Slug(string value)
+    {
+        var characters = value.Trim().ToLowerInvariant()
+            .Select(character => char.IsAsciiLetterOrDigit(character) ? character : '-')
+            .ToArray();
+        var slug = new string(characters);
+        while (slug.Contains("--", StringComparison.Ordinal)) slug = slug.Replace("--", "-", StringComparison.Ordinal);
+        slug = slug.Trim('-');
+        if (slug.Length == 0) return "model";
+        return slug.Length <= 100 ? slug : slug[..100].TrimEnd('-');
+    }
+
+    private static string Message(Exception error, string fallback) => error is Winference.Core.Runtime.RuntimeException runtime
+        ? runtime.Message : fallback;
+
+    private sealed class FamilyBuilder(ModelFamily family)
+    {
+        public ModelFamily Family { get; } = family;
+        public List<LibraryProfile> Profiles { get; } = [];
+
+        public void Add(LibraryProfile profile)
+        {
+            if (Profiles.Any(existing => existing.ProfileId == profile.ProfileId)) return;
+            Profiles.Add(profile);
+        }
+    }
 }

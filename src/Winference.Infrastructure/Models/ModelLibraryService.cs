@@ -253,4 +253,72 @@ public sealed class ModelLibraryService
             Get(families, family).Add(profile);
         }
     }
+
+    private static void AddHybridImport(Dictionary<string, FamilyBuilder> families)
+    {
+        var family = new ModelFamily("amd-ryzen-ai-hybrid", "AMD Ryzen AI GPU + NPU export", "AMD",
+            "A completed AMD Ryzen AI GPU + NPU export. Any compatible export folder can be imported; the app does not download gated exports.");
+        Get(families, family).Add(new LibraryProfile(
+            "hybrid-import", ExecutionMode.GpuNpu, "AMD Ryzen AI 1.7 hybrid worker",
+            new("hybrid:import", family, ModelArtifactFormat.RyzenAiHybrid, "Export-defined", "AMD Ryzen AI export folder",
+                "user-selected", null, null, "AMD Ryzen AI 1.7 hybrid worker"),
+            new(ModelAvailability.ImportRequired, "Choose a completed AMD Ryzen AI export folder."),
+            null, null, null, false, false, true,
+            "Folder import: every top-level file is hashed in place and genai_config.json is validated. No gated export is downloaded by the app."));
+    }
+
+    private static FamilyBuilder Get(Dictionary<string, FamilyBuilder> families, ModelFamily family)
+    {
+        if (families.TryGetValue(family.Id, out var existing)) return existing;
+        var builder = new FamilyBuilder(family);
+        families.Add(family.Id, builder);
+        return builder;
+    }
+
+    private static ModelFamily? KnownFamily(string id) => KnownFamilies.GetValueOrDefault(id);
+
+    private static string FlmFamilyId(string checkpoint) => checkpoint switch
+    {
+        "phi4-mini-it:4b" => "phi-4-mini-instruct",
+        "llama3.2:1b" => "llama-3.2-1b-instruct",
+        "llama3.1:8b" => "llama-3.1-8b-instruct",
+        "qwen2.5-it:3b" => "qwen2.5-3b-instruct",
+        "deepseek-r1:8b" => "deepseek-r1-distill-llama-8b",
+        _ => "flm-" + Slug(checkpoint.Replace(':', '-'))
+    };
+
+    private static ModelFamily FamilyForHybrid(HybridModelRegistration model)
+    {
+        var identity = ((model.RepositoryId ?? "") + " " + model.DisplayName + " " + model.ModelDirectory).ToLowerInvariant();
+        if (identity.Contains("llama-3.2-1b", StringComparison.Ordinal) || identity.Contains("llama3.2-1b", StringComparison.Ordinal))
+            return KnownFamily("llama-3.2-1b-instruct")!;
+        if (identity.Contains("qwen2.5-0.5b", StringComparison.Ordinal))
+            return KnownFamily("qwen2.5-0.5b-instruct")!;
+        if (identity.Contains("qwen2.5-3b", StringComparison.Ordinal))
+            return KnownFamily("qwen2.5-3b-instruct")!;
+        if (identity.Contains("llama-3.1-8b", StringComparison.Ordinal) || identity.Contains("llama3.1-8b", StringComparison.Ordinal))
+            return KnownFamily("llama-3.1-8b-instruct")!;
+        if (identity.Contains("phi-4-mini", StringComparison.Ordinal) || identity.Contains("phi4-mini", StringComparison.Ordinal))
+            return KnownFamily("phi-4-mini-instruct")!;
+        var fallbackId = "local-" + Slug(model.DisplayName);
+        return KnownFamily(fallbackId) ?? new ModelFamily(fallbackId, model.DisplayName,
+            "Local AMD GPU + NPU export", "A user-provided AMD Ryzen AI GPU + NPU export.");
+    }
+
+    private static ModelFamily FamilyForLocalGguf(GpuModelRegistration model)
+    {
+        var identity = (model.DisplayName + " " + Path.GetFileName(model.ModelPath)).ToLowerInvariant();
+        if (identity.Contains("llama-3.2-1b", StringComparison.Ordinal) || identity.Contains("llama3.2-1b", StringComparison.Ordinal))
+            return KnownFamily("llama-3.2-1b-instruct")!;
+        if (identity.Contains("llama-3.1-8b", StringComparison.Ordinal) || identity.Contains("llama3.1-8b", StringComparison.Ordinal))
+            return KnownFamily("llama-3.1-8b-instruct")!;
+        if (identity.Contains("qwen2.5-3b", StringComparison.Ordinal))
+            return KnownFamily("qwen2.5-3b-instruct")!;
+        if (identity.Contains("qwen2.5-0.5b", StringComparison.Ordinal))
+            return KnownFamily("qwen2.5-0.5b-instruct")!;
+        if (identity.Contains("phi-4-mini", StringComparison.Ordinal) || identity.Contains("phi4-mini", StringComparison.Ordinal))
+            return KnownFamily("phi-4-mini-instruct")!;
+        return new ModelFamily("local-gguf-" + model.Sha256[..12], model.DisplayName, "Local GGUF",
+            $"{model.Metadata.Architecture} GGUF registered from a user-selected file.");
+    }
 }

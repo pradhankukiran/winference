@@ -163,4 +163,76 @@ public sealed class ModelRemovalService
             _gate.Release();
         }
     }
+
+    private async Task<ModelRemovalPlan> SnapshotAsync(LibraryProfile profile, CancellationToken token, List<FileStream>? leases = null)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        var target = Resolve(profile) ?? throw Failure("removal_external", "These files are stored outside Winference's model folder and will be kept.");
+        ValidateTarget(target);
+        Guid? registrationId = null;
+        if (profile.ExecutionMode == ExecutionMode.GpuOnly)
+        {
+            var registration = (await _gpuModels.ReadRegisteredAsync(token).ConfigureAwait(false))
+                .SingleOrDefault(model => model.Sha256 == target.Digest);
+            if (registration is not null)
+            {
+                if (!SamePath(registration.ModelPath, Path.Combine(target.Directory, target.Names[0])) ||
+                    registration.Profile.ProfileId != profile.ProfileId)
+                    throw Failure("removal_external", "The registered GPU file is outside this app-owned download. It was kept.");
+                registrationId = registration.Id;
+            }
+        }
+        var files = new List<ModelRemovalFile>();
+        foreach (var name in target.Names.OrderBy(value => value, StringComparer.Ordinal))
+        {
+            token.ThrowIfCancellationRequested();
+            var path = Path.Combine(target.Directory, name);
+            EnsureSafePath(path);
+            if (!File.Exists(path)) continue;
+            var before = new FileInfo(path);
+            var length = before.Length;
+            var modified = before.LastWriteTimeUtc;
+            FileStream? input = new FileStream(path, FileMode.Open, FileAccess.Read,
+                leases is null ? FileShare.Read : FileShare.Read | FileShare.Delete, 1024 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            try
+            {
+                var digest = Convert.ToHexStringLower(await SHA256.HashDataAsync(input, token).ConfigureAwait(false));
+                var after = new FileInfo(path);
+                if (input.Length != length || after.Length != length || after.LastWriteTimeUtc != modified)
+                    throw Failure("removal_changed", "The model changed while it was checked. Review it again; nothing was removed.");
+                files.Add(new(name, length, modified, digest));
+                if (leases is not null) { leases.Add(input); input = null; }
+            }
+            finally { if (input is not null) await input.DisposeAsync().ConfigureAwait(false); }
+        }
+        return new(Guid.NewGuid(), profile.ProfileId, profile.Artifact.Id, profile.ExecutionMode,
+            target.Name, target.ModelId, target.Directory, new ReadOnlyCollection<ModelRemovalFile>(files),
+            files.Sum(file => file.LengthBytes), profile, registrationId);
+    }
+
+    private Target? Resolve(LibraryProfile profile)
+    {
+        if (profile.ExecutionMode == ExecutionMode.GpuOnly)
+        {
+            var entry = _gpuCatalog.Models.SingleOrDefault(model => model.ArtifactId == profile.Artifact.Id);
+            if (entry is null || profile.ProfileId != entry.ProfileId) return null;
+            var directory = Path.Combine(_root, "Models", "Gpu", entry.Id);
+            var destination = Path.Combine(directory, entry.FileName);
+            if (profile.InstalledPath is not null && !SamePath(profile.InstalledPath, destination)) return null;
+            return new(directory, entry.DisplayName, "gguf:" + entry.Sha256, [entry.FileName, entry.FileName + ".part"], entry.Sha256, false);
+        }
+        if (profile.ExecutionMode == ExecutionMode.NpuOnly && profile.Artifact.Id.StartsWith("flm:", StringComparison.Ordinal))
+        {
+            var alias = profile.Artifact.Id[4..];
+            var catalog = FlmModelCatalog.Load(_paths.CatalogPath, _paths.ModelInfoPath);
+            var model = catalog.Models.SingleOrDefault(candidate => candidate.Id == alias);
+            if (model is null || model.Files.Count == 0 || model.Files.Any(file => Path.GetFileName(file.Name) != file.Name)) return null;
+            var root = Path.GetFullPath(_paths.DefaultModelStore);
+            if (profile.InstalledPath is not null && !SamePath(profile.InstalledPath, root)) return null;
+            var names = model.Files.SelectMany(file => new[] { file.Name, file.Name + ".part" }).Distinct(StringComparer.Ordinal).ToArray();
+            return new(Path.Combine(root, "models", model.DirectoryName), model.DisplayName, alias, names, null, true);
+        }
+        return null;
+    }
 }

@@ -235,4 +235,82 @@ public sealed class ModelRemovalService
         }
         return null;
     }
+
+    private void ValidateTarget(Target target)
+    {
+        if (!Path.GetFullPath(target.Directory).StartsWith(_root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw Failure("removal_external", "Only downloads inside this Winference model folder can be removed.");
+        EnsureSafePath(target.Directory);
+        foreach (var name in target.Names)
+        {
+            var path = Path.Combine(target.Directory, name);
+            EnsureSafePath(path);
+            if (Directory.Exists(path)) throw Failure("removal_location", "A model filename is occupied by a directory. Its contents were kept.");
+        }
+        if (target.Npu)
+        {
+            var marker = Path.Combine(_paths.DefaultModelStore, ".winference-owned-store");
+            EnsureSafePath(marker);
+            if (!File.Exists(marker) || new FileInfo(marker).Length > 1024 || File.ReadAllText(marker) != StoreMarker)
+                throw Failure("removal_external", "This NPU folder has no valid Winference ownership marker. Its files were kept.");
+        }
+    }
+
+    private async Task<IReadOnlyList<StateChange>> MetadataChangesAsync(ModelRemovalPlan plan, CancellationToken token)
+    {
+        var changes = new List<StateChange>();
+        var clearNpuChoice = false;
+        if (plan.ExecutionMode == ExecutionMode.GpuOnly)
+        {
+            var registry = await ReadStateAsync(Path.Combine(_root, "Gpu", "models.json"), token).ConfigureAwait(false);
+            if (registry is not null)
+            {
+                var models = registry.Node["models"] as JsonArray ?? throw State();
+                var removed = false;
+                foreach (var item in models.ToArray())
+                    if (plan.GpuRegistrationId is not null && item?["id"]?.GetValue<Guid>() == plan.GpuRegistrationId)
+                    { models.Remove(item); removed = true; }
+                if (removed)
+                    changes.Add(registry with { After = Serialize(registry.Node) });
+            }
+            var choice = await ReadStateAsync(Path.Combine(_root, "Gpu", "selection.json"), token).ConfigureAwait(false);
+            if (choice is not null && (plan.GpuRegistrationId is not null && choice.Node["id"]?.GetValue<Guid>() == plan.GpuRegistrationId ||
+                choice.Node["sha256"]?.GetValue<string>() == plan.ArtifactId[7..] && choice.Node["profileId"]?.GetValue<string>() == plan.ProfileId))
+                changes.Add(choice with { After = null });
+        }
+        else
+        {
+            var setup = await ReadStateAsync(_paths.SettingsPath, token).ConfigureAwait(false);
+            if (setup is not null && setup.Node["modelId"]?.GetValue<string>() == plan.ModelId &&
+                setup.Node["modelRoot"]?.GetValue<string>() is { } root && SamePath(root, _paths.DefaultModelStore))
+            { changes.Add(setup with { After = null }); clearNpuChoice = true; }
+        }
+        var active = await ReadStateAsync(Path.Combine(_root, "active-model.json"), token).ConfigureAwait(false);
+        if (active is not null)
+        {
+            var mode = active.Node["mode"]?.GetValue<int>();
+            if (plan.ExecutionMode == ExecutionMode.GpuOnly && plan.GpuRegistrationId is not null && mode == (int)ExecutionMode.GpuOnly &&
+                    active.Node["gpuRegistrationId"]?.GetValue<Guid>() == plan.GpuRegistrationId ||
+                clearNpuChoice && mode == (int)ExecutionMode.NpuOnly)
+                changes.Add(active with { After = null });
+        }
+        return changes;
+    }
+
+    private async Task<StateChange?> ReadStateAsync(string path, CancellationToken token)
+    {
+        EnsureSafePath(path);
+        if (Directory.Exists(path)) throw State();
+        if (!File.Exists(path)) return null;
+        if (new FileInfo(path).Length > MaximumStateBytes) throw State();
+        try
+        {
+            var bytes = await File.ReadAllBytesAsync(path, token).ConfigureAwait(false);
+            var node = JsonNode.Parse(bytes, documentOptions: new JsonDocumentOptions { MaxDepth = 32 }) as JsonObject ?? throw State();
+            if (node["schemaVersion"]?.GetValue<int>() != 1) throw State();
+            return new(path, bytes, bytes, node);
+        }
+        catch (Exception error) when (error is JsonException or InvalidOperationException or FormatException)
+        { throw State(error); }
+    }
 }

@@ -313,4 +313,50 @@ public sealed class ModelRemovalService
         catch (Exception error) when (error is JsonException or InvalidOperationException or FormatException)
         { throw State(error); }
     }
+
+    private async Task ApplyAsync(string path, byte[]? bytes)
+    {
+        EnsureSafePath(path);
+        if (bytes is null) { File.Delete(path); return; }
+        var temporary = path + ".remove-" + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            await File.WriteAllBytesAsync(temporary, bytes).ConfigureAwait(false);
+            EnsureSafePath(path);
+            File.Move(temporary, path, true);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    private async Task RestoreAsync(StateChange change)
+    {
+        EnsureSafePath(change.Path);
+        if (File.Exists(change.Path) && File.ReadAllBytes(change.Path).AsSpan().SequenceEqual(change.Before)) return;
+        await ApplyAsync(change.Path, change.Before).ConfigureAwait(false);
+    }
+
+    private static byte[] Serialize(JsonObject node) => Encoding.UTF8.GetBytes(node.ToJsonString(AtomicJson.Options));
+    private static bool SameSnapshot(ModelRemovalPlan first, ModelRemovalPlan second) =>
+        first.ProfileId == second.ProfileId && first.ArtifactId == second.ArtifactId && first.ExecutionMode == second.ExecutionMode &&
+        first.ModelId == second.ModelId && first.GpuRegistrationId == second.GpuRegistrationId &&
+        SamePath(first.ModelDirectory, second.ModelDirectory) && first.Files.SequenceEqual(second.Files);
+    private static bool SamePath(string first, string second) => string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), StringComparison.OrdinalIgnoreCase);
+    private static void EnsureSafePath(string path)
+    {
+        for (var current = Path.GetFullPath(path); !string.IsNullOrEmpty(current); current = Path.GetDirectoryName(current))
+        {
+            var info = Directory.Exists(current) ? (FileSystemInfo)new DirectoryInfo(current) : new FileInfo(current);
+            if (info.LinkTarget is not null || info.Exists && (info.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw Failure("removal_link", "The model or removal folder contains a linked entry. Its files were kept.");
+        }
+    }
+    private static void TryRemoveEmpty(string directory)
+    {
+        try { EnsureSafePath(directory); if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any()) Directory.Delete(directory); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or RuntimeException) { }
+    }
+    private static RuntimeException Failure(string code, string message, Exception? error = null) => new(code, message, error);
+    private static RuntimeException State(Exception? error = null) => Failure("removal_state", "Saved model choices could not be read safely. Nothing was removed; repair the model list before retrying.", error);
+    private sealed record Target(string Directory, string Name, string ModelId, string[] Names, string? Digest, bool Npu);
+    private sealed record StateChange(string Path, byte[] Before, byte[]? After, JsonObject Node);
 }

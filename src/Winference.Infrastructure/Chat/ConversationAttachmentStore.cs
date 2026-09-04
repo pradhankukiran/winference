@@ -133,4 +133,49 @@ public sealed class ConversationAttachmentStore(string dataRoot)
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or EndOfStreamException) { return null; }
         }
     }
+
+    private string VectorPath(Guid conversationId, string attachmentId, string model)
+    {
+        var safeModel = new string(model.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray());
+        return Path.ChangeExtension(TextPath(conversationId, attachmentId), null) + "." + safeModel + ".vec";
+    }
+
+    private string Folder(Guid conversationId) => Path.Combine(_root, conversationId.ToString("N"));
+    private string ManifestPath(Guid conversationId) => Path.Combine(Folder(conversationId), "attachments.json");
+
+    private string TextPath(Guid conversationId, string attachmentId)
+    {
+        if (attachmentId.Length != 32 || !attachmentId.All(char.IsAsciiHexDigitLower))
+            throw new ArgumentException("Invalid attachment id.", nameof(attachmentId));
+        return Path.Combine(Folder(conversationId), attachmentId + ".txt");
+    }
+
+    private List<AttachmentInfo> ReadManifest(Guid conversationId)
+    {
+        try
+        {
+            var path = ManifestPath(conversationId);
+            if (!File.Exists(path)) return [];
+            return (JsonSerializer.Deserialize<List<AttachmentInfo>>(File.ReadAllText(path), Options) ?? [])
+                .Where(item => item is { Id.Length: 32, FileName.Length: > 0 } && item.Id.All(char.IsAsciiHexDigitLower)).ToList();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return [];
+        }
+    }
+
+    private void WriteManifest(Guid conversationId, List<AttachmentInfo> manifest)
+    {
+        var path = ManifestPath(conversationId);
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(manifest, Options));
+        File.Move(temporary, path, overwrite: true);
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
 }

@@ -142,4 +142,65 @@ public sealed class JsonConversationStore
             throw new InvalidDataException("The active conversation is missing.");
         return workspace with { Conversations = conversations.ToArray() };
     }
+
+    private static bool Identity(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 512;
+
+    private static bool ValidOutcome(string? value) => value is null or "running" or "completed" or "stopped" or "failed" or "length" or "interrupted";
+
+    private static bool ValidOrigin(string? model, string? profile, string? artifact, string? name,
+        Winference.Core.Models.ExecutionMode? mode, bool allowUnattributedLabel = false) =>
+        (model is null && profile is null && artifact is null && (allowUnattributedLabel || name is null && mode is null) ||
+         Identity(model) && Identity(profile) && Identity(artifact)) &&
+        (name is null || !string.IsNullOrWhiteSpace(name) && name.Length <= 200) &&
+        (mode is null || Enum.IsDefined(mode.Value));
+
+    private static ChatWorkspaceLoadResult Normalize(ChatWorkspace workspace)
+    {
+        var changed = false;
+        var conversations = workspace.Conversations.Select(conversation =>
+        {
+            var messages = conversation.Messages.ToArray();
+            for (var i = 0; i < messages.Length; i++)
+            {
+                var current = messages[i];
+                if (current.Role == "user" && i + 1 < messages.Length && messages[i + 1].Role == "assistant")
+                {
+                    var assistant = messages[i + 1];
+                    var completed = current.IsContextEligible && assistant.IsContextEligible &&
+                        assistant.Status.Length == 0 && !string.IsNullOrWhiteSpace(current.Text) &&
+                        !string.IsNullOrWhiteSpace(assistant.Text) &&
+                        (assistant.AttemptOutcome is null or "completed") &&
+                        (assistant.TurnId is null || assistant.TurnId == current.Id);
+                    messages[i] = current with { IsContextEligible = completed };
+                    messages[i + 1] = assistant with
+                    {
+                        IsContextEligible = completed,
+                        Status = completed ? assistant.Status : RestoredStatus(assistant.Status),
+                        AttemptOutcome = assistant.AttemptOutcome == "running" ? "interrupted" : assistant.AttemptOutcome
+                    };
+                    changed |= messages[i] != current || messages[i + 1] != assistant;
+                    i++;
+                }
+                else
+                {
+                    messages[i] = current with
+                    {
+                        IsContextEligible = false,
+                        Status = current.Role == "assistant" ? RestoredStatus(current.Status) : current.Status,
+                        AttemptOutcome = current.AttemptOutcome == "running" ? "interrupted" : current.AttemptOutcome
+                    };
+                    changed |= messages[i] != current;
+                }
+            }
+            return conversation with { Messages = messages };
+        }).ToArray();
+        return new(workspace with { Conversations = conversations },
+            changed ? "An unfinished reply was restored as interrupted. Completed replies were kept." : null);
+    }
+
+    private static string RestoredStatus(string status) => status.Length == 0 ||
+        status.StartsWith("Thinking", StringComparison.OrdinalIgnoreCase) ||
+        status.StartsWith("Writing", StringComparison.OrdinalIgnoreCase) ||
+        status.StartsWith("Generating", StringComparison.OrdinalIgnoreCase)
+            ? "Interrupted" : status;
 }

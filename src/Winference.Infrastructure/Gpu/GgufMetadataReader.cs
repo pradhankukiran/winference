@@ -119,4 +119,87 @@ public static class GgufMetadataReader
             throw Invalid("The GGUF metadata is truncated or malformed. The existing file was preserved.", error);
         }
     }
+
+    private static bool Wanted(string key) => key is "general.name" or "general.architecture" or "general.file_type" or "general.alignment" or
+        "general.type" or "tokenizer.ggml.model" or "tokenizer.chat_template" or "split.count" ||
+        key.EndsWith(".context_length", StringComparison.Ordinal);
+    private static string Text(Dictionary<string, object?> values, string key) => values.GetValueOrDefault(key) as string ?? string.Empty;
+    private static ulong? Number(Dictionary<string, object?> values, string key) => values.GetValueOrDefault(key) switch
+    {
+        byte value => value, ushort value => value, uint value => value, ulong value => value,
+        sbyte value when value >= 0 => (ulong)value, short value when value >= 0 => (ulong)value,
+        int value when value >= 0 => (ulong)value, long value when value >= 0 => (ulong)value,
+        _ => null
+    };
+    private static string SanitizeName(string value)
+    {
+        var name = new string(value.Where(character => !char.IsControl(character)).ToArray()).Trim();
+        if (name.Length == 0) name = "Local GGUF model";
+        return name[..Math.Min(name.Length, 200)];
+    }
+    private static RuntimeException Invalid(string message, Exception? inner = null) => new("gguf_metadata", message, inner);
+
+    private sealed class Reader(Stream stream, CancellationToken token)
+    {
+        private readonly BinaryReader _binary = new(stream, StrictUtf8, leaveOpen: true);
+        public byte[] Bytes(int length)
+        {
+            Ensure(length);
+            var bytes = _binary.ReadBytes(length);
+            if (bytes.Length != length) throw new EndOfStreamException();
+            return bytes;
+        }
+        public uint UInt32() { Ensure(4); return _binary.ReadUInt32(); }
+        public ulong UInt64() { Ensure(8); return _binary.ReadUInt64(); }
+        public string String(int limit = MaximumStringBytes)
+        {
+            var length = UInt64();
+            if (length > (ulong)limit) throw Invalid("A GGUF metadata string exceeds the supported size.");
+            return StrictUtf8.GetString(Bytes(checked((int)length)));
+        }
+        public object Scalar(uint type)
+        {
+            if (type == 8) return String();
+            Ensure(Width(type));
+            return type switch
+            {
+                0 => _binary.ReadByte(), 1 => _binary.ReadSByte(), 2 => _binary.ReadUInt16(), 3 => _binary.ReadInt16(),
+                4 => _binary.ReadUInt32(), 5 => _binary.ReadInt32(), 6 => _binary.ReadSingle(), 7 => _binary.ReadBoolean(),
+                10 => _binary.ReadUInt64(), 11 => _binary.ReadInt64(), 12 => _binary.ReadDouble(),
+                _ => throw Invalid("The GGUF contains an unknown metadata value type.")
+            };
+        }
+        public void SkipValue(uint type, int depth = 0)
+        {
+            token.ThrowIfCancellationRequested();
+            if (type == 8)
+            {
+                var length = UInt64();
+                if (length > MaximumMetadataBytes) throw Invalid("A GGUF metadata string exceeds the supported header size.");
+                Skip(checked((long)length));
+            }
+            else if (type == 9)
+            {
+                if (depth >= MaximumArrayDepth) throw Invalid("The GGUF has excessively nested metadata arrays.");
+                var itemType = UInt32();
+                var count = UInt64();
+                if (count > MaximumArrayItems) throw Invalid("The GGUF metadata array exceeds the supported size.");
+                if (itemType is not (8 or 9)) Skip(checked(Width(itemType) * (long)count));
+                else for (ulong index = 0; index < count; ++index) SkipValue(itemType, depth + 1);
+            }
+            else Skip(Width(type));
+        }
+        private void Skip(long length) { Ensure(length); stream.Seek(length, SeekOrigin.Current); }
+        private void Ensure(long length)
+        {
+            token.ThrowIfCancellationRequested();
+            if (length < 0 || stream.Position > MaximumMetadataBytes - length || stream.Position > stream.Length - length)
+                throw new EndOfStreamException();
+        }
+        private static int Width(uint type) => type switch
+        {
+            0 or 1 or 7 => 1, 2 or 3 => 2, 4 or 5 or 6 => 4, 10 or 11 or 12 => 8,
+            _ => throw Invalid("The GGUF contains an unknown metadata value type.")
+        };
+    }
 }

@@ -138,4 +138,77 @@ public sealed class GpuModelService
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
         { return new(false, "The selected GGUF file could not be read. Check its location and access, then retry.", "gpu_model_access"); }
     }
+
+    private async Task<Registry> ReadRegistryAsync(CancellationToken token)
+    {
+        if (!File.Exists(_registryPath)) return new(1, []);
+        try
+        {
+            if (new FileInfo(_registryPath).Length > MaximumRegistryBytes) throw State("The GPU model list exceeds the supported size. Its original file was preserved.");
+            var registry = await AtomicJson.ReadAsync<Registry>(_registryPath, token).ConfigureAwait(false);
+            if (registry is null || registry.SchemaVersion != 1 || registry.Models is null || registry.Models.Count > 128 ||
+                registry.Models.Any(item => item is null) || registry.Models.Select(item => item.Id).Distinct().Count() != registry.Models.Count)
+                throw State("The GPU model list is invalid. Its original file was preserved.");
+            foreach (var model in registry.Models) Validate(model);
+            return registry;
+        }
+        catch (JsonException error) { throw State("The GPU model list could not be read. Its original file was preserved.", error); }
+    }
+
+    private static void Validate(GpuModelRegistration model)
+    {
+        if (model is null || model.SchemaVersion != 1 || model.Id == Guid.Empty || model.LengthBytes <= 24 ||
+            model.RegisteredUtc == default || model.Metadata is null || model.Profile is null ||
+            model.Sha256 is not { Length: 64 } || model.Sha256.Any(character => !Uri.IsHexDigit(character)) ||
+            model.Sha256 != model.Sha256.ToLowerInvariant() || model.Metadata.DisplayName is not { Length: > 0 and <= 200 } ||
+            string.IsNullOrWhiteSpace(model.Metadata.Architecture) || string.IsNullOrWhiteSpace(model.Metadata.ChatTemplate) ||
+            string.IsNullOrWhiteSpace(model.Metadata.TokenizerModel) || model.Metadata.ChatTemplate.Length > 1_048_576 ||
+            model.Metadata.Version is not (2 or 3) || model.Metadata.TensorCount is 0 or > 1_000_000 ||
+            model.Profile.ContextLength is < 512 or > 2048 ||
+            model.Metadata.MaximumContextLength is { } max && model.Profile.ContextLength > max ||
+            model.Profile != Profile("gguf:" + model.Sha256, model.Sha256, model.Profile.ContextLength, Path.GetFileName(model.ModelPath)))
+            throw State("The GPU model registration is invalid. Choose the GGUF file again; existing files were preserved.");
+        _ = ValidatePath(model.ModelPath);
+    }
+
+    private static ModelProfile Profile(string modelId, string digest, int context, string alias) =>
+        new(modelId, $"gguf-{digest}-vulkan-c{context}", "sha256:" + digest,
+            alias, ExecutionMode.GpuOnly, context, 256);
+
+    private static string ValidatePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+            throw State("Choose an existing GGUF file with a complete local path.");
+        var fullPath = Path.GetFullPath(path);
+        var name = Path.GetFileName(fullPath);
+        // Matches the retained ODS plan's ASCII basename rule; parent folders may contain Unicode.
+        if (name.Length is < 6 or > 240 || name[0] == '.' || name != name.Trim() ||
+            !name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) ||
+            name.Any(character => character is < ' ' or > '~' || "\\/:*?\"<>|".Contains(character)))
+            throw State("Choose a .gguf file whose filename uses ordinary English letters, numbers and punctuation. Parent folders may use other languages.");
+        if (Regex.IsMatch(name, @"-\d{5}-of-\d{5}\.gguf$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            throw State("Split GGUF files are not supported in this phase. Choose one complete GGUF file.");
+        return fullPath;
+    }
+
+    private static async Task<string> HashAsync(FileStream file, IProgress<SetupProgress>? progress, CancellationToken token)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[1024 * 1024];
+        long completed = 0;
+        while (true)
+        {
+            var read = await file.ReadAsync(buffer, token).ConfigureAwait(false);
+            if (read == 0) break;
+            hash.AppendData(buffer, 0, read);
+            completed += read;
+            progress?.Report(new("VerifyingGguf", "Verifying the selected model. Existing files are kept in place…", completed, file.Length));
+        }
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
+    private static bool SamePath(string first, string second) =>
+        string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), StringComparison.OrdinalIgnoreCase);
+    private static RuntimeException State(string message, Exception? inner = null) => new("gpu_model_state", message, inner);
+    private sealed record Registry(int SchemaVersion, IReadOnlyList<GpuModelRegistration> Models);
+    private sealed record Selection(int SchemaVersion, Guid Id, string Sha256, string ProfileId);
 }

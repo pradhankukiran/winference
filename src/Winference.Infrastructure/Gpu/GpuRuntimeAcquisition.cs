@@ -177,4 +177,73 @@ public sealed class GpuRuntimeAcquisition
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidDataException or RuntimeException)
         { return false; }
     }
+
+    private static List<(ZipArchiveEntry Entry, string Relative)> PayloadEntries(ZipArchive archive)
+    {
+        if (archive.Entries.Count is 0 or > 8192) throw InvalidArchive();
+        var files = archive.Entries.Where(entry => !entry.FullName.EndsWith('/') && !entry.FullName.EndsWith('\\')).ToArray();
+        if (files.Length == 0) throw InvalidArchive();
+        long total = 0;
+        foreach (var entry in archive.Entries)
+        {
+            // A ZIP symlink could redirect later extraction outside the staging directory.
+            if (((entry.ExternalAttributes >> 16) & 0xf000) == 0xa000) throw InvalidArchive();
+            total = checked(total + entry.Length);
+            if (total > MaximumExtractedBytes) throw InvalidArchive();
+        }
+        var paths = files.Select(entry => entry.FullName.Replace('\\', '/')).ToArray();
+        var firstParts = paths.Select(path => path.Split('/')[0]).Distinct(StringComparer.Ordinal).ToArray();
+        var prefix = firstParts.Length == 1 && paths.All(path => path.Contains('/')) ? firstParts[0] + "/" : string.Empty;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<(ZipArchiveEntry, string)>();
+        for (var index = 0; index < files.Length; ++index)
+        {
+            var relative = prefix.Length > 0 ? paths[index][prefix.Length..] : paths[index];
+            if (!SafeRelative(relative) || relative.Equals("pin.json", StringComparison.OrdinalIgnoreCase) || !seen.Add(relative)) throw InvalidArchive();
+            result.Add((files[index], relative));
+        }
+        return result;
+    }
+    private static bool SafeRelative(string path) => !string.IsNullOrWhiteSpace(path) && path.Length <= 1024 &&
+        !Path.IsPathRooted(path) && path.Split('/').All(part => part.Length > 0 && part is not ("." or "..") &&
+            part.All(character => !char.IsControl(character) && "\\:*?\"<>|".IndexOf(character) < 0));
+    private static bool IsReparsePoint(string file, string root)
+    {
+        for (var current = Path.GetFullPath(file); ; current = Path.GetDirectoryName(current)!)
+        {
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return true;
+            if (SamePath(current, root)) return false;
+            if (Path.GetDirectoryName(current) is null) return true;
+        }
+    }
+    private static IEnumerable<string> EnumerateRuntimeFiles(string root)
+    {
+        var directories = new Stack<string>();
+        directories.Push(root);
+        while (directories.Count > 0)
+        {
+            var directory = directories.Pop();
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0) throw InvalidArchive();
+                if ((attributes & FileAttributes.Directory) != 0) directories.Push(entry);
+                else yield return entry;
+            }
+        }
+    }
+    private static bool Inside(string directory, string path) => path.StartsWith(
+        Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar,
+        StringComparison.OrdinalIgnoreCase);
+    private static bool SamePath(string first, string second) => string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), StringComparison.OrdinalIgnoreCase);
+    private static async Task<string> HashFileAsync(string path, CancellationToken token)
+    {
+        await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return Convert.ToHexStringLower(await SHA256.HashDataAsync(file, token).ConfigureAwait(false));
+    }
+    private static RuntimeException InvalidArchive() => new("gpu_runtime_archive", "The GPU component archive has an invalid or unsupported layout. It was not installed.");
+    private sealed record RuntimeFile(string Path, string Sha256, long Size);
+    private sealed record RuntimePin(int SchemaVersion, string ReleaseTag, string Asset, string ZipSha256,
+        string Source, IReadOnlyList<RuntimeFile> Files);
 }

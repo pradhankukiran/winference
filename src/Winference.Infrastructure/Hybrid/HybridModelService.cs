@@ -148,4 +148,120 @@ public sealed class HybridModelService
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or JsonException)
         { return new(false, "The GPU + NPU model folder could not be read. Check its location and access, then retry.", "hybrid_model_access"); }
     }
+
+    /// <summary>Keep this lease through the runtime session to prevent model writes or replacement on Windows.</summary>
+    public static Task<IDisposable> OpenVerifiedReadLeaseAsync(HybridModelRegistration registration,
+        CancellationToken cancellationToken = default) => OpenVerifiedReadLeaseCoreAsync(registration, null, cancellationToken);
+
+    private static async Task<IDisposable> OpenVerifiedReadLeaseCoreAsync(HybridModelRegistration registration,
+        IProgress<SetupProgress>? progress, CancellationToken token)
+    {
+        Validate(registration);
+        token.ThrowIfCancellationRequested();
+        var root = ValidateFolderPath(registration.ModelDirectory);
+        var export = await OpenExportAsync(root, registration.ModelFiles.Select(file => file.Name).ToArray(), progress, token)
+            .ConfigureAwait(false);
+        var kept = false;
+        try
+        {
+            if (export.ModelFiles.Count != registration.ModelFiles.Count ||
+                !export.ModelFiles.OrderBy(file => file.Name, StringComparer.Ordinal)
+                    .SequenceEqual(registration.ModelFiles.OrderBy(file => file.Name, StringComparer.Ordinal)))
+                throw Changed();
+            var configuration = export.Configuration ?? throw InvalidConfiguration();
+            if (configuration.ContextLength != registration.ContextLength) throw InvalidConfiguration();
+            if (registration.ModelType.Length != 0 && configuration.ModelType != registration.ModelType)
+                throw InvalidConfiguration();
+            kept = true;
+            return export;
+        }
+        finally { if (!kept) export.Dispose(); }
+    }
+
+    /// <summary>Open, hash and structurally validate one hybrid export folder.</summary>
+    private static async Task<ReadLease> OpenExportAsync(string root, IReadOnlyList<string>? expected,
+        IProgress<SetupProgress>? progress, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (!Directory.Exists(root))
+            throw new RuntimeException("hybrid_model_missing", "The GPU + NPU model folder was not found. Choose its current location in Models.");
+        var present = EnumerateTopLevel(root);
+        var names = expected ?? present;
+        if (names.Count == 0) throw Missing();
+        if (names.Count > MaximumExportFiles)
+            throw State("This GPU + NPU folder contains too many files for this build. Choose the export folder itself.");
+        if (expected is not null && expected.Any(name => !present.Contains(name, StringComparer.OrdinalIgnoreCase))) throw Missing();
+        if (!names.Contains("genai_config.json", StringComparer.OrdinalIgnoreCase))
+            throw new RuntimeException("hybrid_model_configuration", "This folder is not a GPU + NPU export: genai_config.json is missing. Choose the export folder itself.");
+        var lease = new ReadLease();
+        try
+        {
+            foreach (var name in names)
+            {
+                token.ThrowIfCancellationRequested();
+                if (!IsSafeFileName(name)) throw State("The GPU + NPU registration contains an unsafe file name. Choose its complete folder again.");
+                var path = Path.Combine(root, name);
+                var before = new FileInfo(path);
+                if (!before.Exists) throw Missing();
+                if ((before.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw State("The GPU + NPU folder contains a linked entry. Choose the original complete export.");
+                // Retain every handle before hashing. FileAccess.Read prevents local mutations
+                // while FileShare.ReadWrite allows native runtimes to map data without sharing conflicts.
+                var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
+                    1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                lease.Handles.Add(new(name, stream, before.LastWriteTimeUtc));
+            }
+            var total = lease.Handles.Sum(file => file.Stream.Length);
+            if (total > MaximumExportBytes)
+                throw State("This GPU + NPU folder is larger than this build supports. Choose a smaller export.");
+            long completed = 0;
+            progress?.Report(new("VerifyingHybrid", "Verifying the GPU + NPU model. Its original files stay in place…", completed, total));
+            var buffer = new byte[1024 * 1024];
+            var files = new List<HybridModelFile>(lease.Handles.Count);
+            foreach (var opened in lease.Handles)
+            {
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                long reported = completed;
+                int read;
+                while ((read = await opened.Stream.ReadAsync(buffer, token).ConfigureAwait(false)) != 0)
+                {
+                    hash.AppendData(buffer, 0, read);
+                    completed += read;
+                    if (completed - reported >= 16 * 1024 * 1024)
+                    {
+                        progress?.Report(new("VerifyingHybrid", "Verifying the GPU + NPU model. Its original files stay in place…", completed, total));
+                        reported = completed;
+                    }
+                }
+                files.Add(new(opened.Name, opened.Stream.Length, Convert.ToHexStringLower(hash.GetHashAndReset())));
+                progress?.Report(new("VerifyingHybrid", "Verifying the GPU + NPU model. Its original files stay in place…", completed, total));
+            }
+            files.Sort((first, second) => string.CompareOrdinal(first.Name, second.Name));
+            lease.ModelFiles = files;
+            var configuration = lease.Handles.Single(file => string.Equals(file.Name, "genai_config.json", StringComparison.OrdinalIgnoreCase));
+            if (configuration.Stream.Length is <= 0 or > MaximumConfigurationBytes) throw InvalidConfiguration();
+            configuration.Stream.Position = 0;
+            try
+            {
+                using var document = await JsonDocument.ParseAsync(configuration.Stream,
+                    new JsonDocumentOptions { MaxDepth = 32 }, token).ConfigureAwait(false);
+                lease.Configuration = ReadConfiguration(document.RootElement, files.Select(file => file.Name).ToArray());
+            }
+            catch (JsonException error) { throw InvalidConfiguration(error); }
+            foreach (var opened in lease.Handles)
+            {
+                var after = new FileInfo(Path.Combine(root, opened.Name));
+                if (!after.Exists || after.Length != opened.Stream.Length || after.LastWriteTimeUtc != opened.ModifiedUtc) throw Changed();
+            }
+            if (expected is null)
+            {
+                var remaining = EnumerateTopLevel(root);
+                if (!remaining.OrderBy(name => name, StringComparer.Ordinal).SequenceEqual(names.OrderBy(name => name, StringComparer.Ordinal)))
+                    throw Changed();
+            }
+            token.ThrowIfCancellationRequested();
+            return lease;
+        }
+        catch { lease.Dispose(); throw; }
+    }
 }

@@ -264,4 +264,72 @@ public sealed class HybridModelService
         }
         catch { lease.Dispose(); throw; }
     }
+
+    /// <summary>The export must be one flat folder of regular files plus Hugging Face's cache metadata.</summary>
+    private static List<string> EnumerateTopLevel(string root)
+    {
+        for (DirectoryInfo? directory = new DirectoryInfo(root); directory is not null; directory = directory.Parent)
+            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw State("Choose the original GPU + NPU folder rather than a linked folder.");
+        var files = new List<string>();
+        foreach (var path in Directory.EnumerateFileSystemEntries(root))
+        {
+            var name = Path.GetFileName(path);
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw State("The hybrid folder contains a linked entry. Choose the original complete export.");
+            if ((attributes & FileAttributes.Directory) == 0) { files.Add(name); continue; }
+            // hf download creates this non-model metadata. Nested model folders
+            // are refused because the worker copies only top-level files.
+            if (name != ".cache") throw State("The GPU + NPU folder contains nested folders. Choose the folder that holds genai_config.json directly.");
+            foreach (var entry in Directory.EnumerateFileSystemEntries(path))
+            {
+                var cacheAttributes = File.GetAttributes(entry);
+                if (Path.GetFileName(entry) != "huggingface" || (cacheAttributes & FileAttributes.Directory) == 0 ||
+                    (cacheAttributes & FileAttributes.ReparsePoint) != 0)
+                    throw State("The GPU + NPU folder contains unrecognized cache entries. Existing files were kept.");
+            }
+        }
+        return files;
+    }
+
+    private async Task<Registry> ReadRegistryAsync(CancellationToken token)
+    {
+        if (!File.Exists(_registryPath)) return new(1, []);
+        try
+        {
+            if (new FileInfo(_registryPath).Length > MaximumRegistryBytes) throw State("The hybrid model list exceeds this build's supported size. Its original file was kept.");
+            var registry = await AtomicJson.ReadAsync<Registry>(_registryPath, token).ConfigureAwait(false);
+            if (registry is null || registry.SchemaVersion != 1 || registry.Models is null || registry.Models.Count > 128 ||
+                registry.Models.Any(model => model is null) || registry.Models.Select(model => model.Id).Distinct().Count() != registry.Models.Count ||
+                registry.Models.Select(model => model.Sha256).Distinct(StringComparer.Ordinal).Count() != registry.Models.Count)
+                throw State("The hybrid model list is invalid. Its original file was kept.");
+            foreach (var model in registry.Models) Validate(model);
+            return registry;
+        }
+        catch (JsonException error) { throw State("The hybrid model list could not be read. Its original file was kept.", error); }
+    }
+
+    private static void Validate(HybridModelRegistration model)
+    {
+        if (model is null) throw State("The hybrid registration is missing. Existing files were kept.");
+        if (model.SchemaVersion != 1 || model.Id == Guid.Empty || model.RegisteredUtc == default ||
+            !IsFriendlyName(model.DisplayName) || model.ModelFiles is null || model.ModelFiles.Count is 0 or > MaximumExportFiles ||
+            model.ModelFiles.Any(file => file is null || !IsSafeFileName(file.Name) || file.LengthBytes < 0 || !IsDigest(file.Sha256)) ||
+            model.ModelFiles.Select(file => file.Name).Distinct(StringComparer.Ordinal).Count() != model.ModelFiles.Count ||
+            !IsDigest(model.Sha256) || ComputeManifestDigest(model.ModelFiles) != model.Sha256 ||
+            model.ContextLength <= MaximumOutputTokens || model.ContextLength > MaximumContextLength ||
+            model.Profile != CreateProfile(model.RepositoryId ?? "", model.Revision ?? "", model.Sha256, model.ContextLength) ||
+            (model.ModelType is { Length: > 0 } type && !IsModelType(type)))
+            throw State("The hybrid registration does not match its own files. Choose its complete folder again; existing files were kept.");
+        _ = ValidateFolderPath(model.ModelDirectory);
+    }
+
+    private static ModelProfile CreateProfile(string repositoryId, string revision, string sha256, int contextLength)
+    {
+        var family = repositoryId.Length == 0 ? "local/hybrid" : repositoryId;
+        var version = revision.Length == 0 ? sha256 : revision;
+        return new(family + "@" + version, $"hybrid-{sha256}-ryzenai1.7-c{contextLength}", "sha256:" + sha256,
+            "user.Winference-Hybrid-" + sha256[..16], ExecutionMode.GpuNpu, contextLength, MaximumOutputTokens);
+    }
 }

@@ -407,4 +407,47 @@ public sealed class HybridModelService
         var display = baseModel is null ? "" : FriendlyName(baseModel[(baseModel.LastIndexOf('/') + 1)..]);
         return (display.Length == 0 ? fallback : display, repositoryId);
     }
+
+    private static string ReadRevision(string directory)
+    {
+        try
+        {
+            var path = Path.Combine(directory, ".cache", "huggingface", "download", "genai_config.json.metadata");
+            if (!File.Exists(path) || new FileInfo(path).Length is <= 0 or > MaximumMetadataBytes) return "";
+            var first = File.ReadLines(path).FirstOrDefault()?.Trim();
+            return first is { Length: 40 } && first.All(Uri.IsHexDigit) ? first.ToLowerInvariant() : "";
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return ""; }
+    }
+
+    private static string FriendlyName(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value.Trim())
+        {
+            if (char.IsControl(character)) continue;
+            builder.Append(character is '-' or '_' ? ' ' : character);
+        }
+        var name = string.Join(' ', builder.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return name.Length == 0 ? "Hybrid model" : name[..Math.Min(name.Length, 128)];
+    }
+
+    private static bool IsKnownDefective(HybridModelRegistration model) =>
+        IsKnownDefectiveName(model.RepositoryId ?? "") || IsKnownDefectiveName(model.ModelDirectory ?? "");
+
+    private static bool IsKnownDefectiveName(string value)
+    {
+        var name = value.Replace('\\', '/').TrimEnd('/');
+        var slash = name.LastIndexOf('/');
+        if (slash >= 0) name = name[(slash + 1)..];
+        return KnownDefectiveExports.Contains(name, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsFriendlyName(string? value) => value is { Length: > 0 and <= 128 } && !value.Any(char.IsControl);
+
+    private static bool IsModelType(string? value) => value is { Length: > 0 and <= 64 } && char.IsAsciiLetter(value[0]) &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.');
+
+    private static bool IsDigest(string? value) => value is { Length: 64 } &&
+        value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 }

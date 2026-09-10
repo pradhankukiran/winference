@@ -450,4 +450,55 @@ public sealed class HybridModelService
 
     private static bool IsDigest(string? value) => value is { Length: 64 } &&
         value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static bool IsSafeFileName(string? name) => name is { Length: > 0 and <= 255 } && name is not ("." or "..") &&
+        name == Path.GetFileName(name) && !name.Any(char.IsControl) && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
+
+    private static string ComputeManifestDigest(IEnumerable<HybridModelFile> files)
+    {
+        var canonical = string.Concat(files.OrderBy(file => file.Name, StringComparer.Ordinal)
+            .Select(file => file.Name + "\t" + file.LengthBytes.ToString(CultureInfo.InvariantCulture) + "\t" + file.Sha256 + "\n"));
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
+
+    private static string ValidateFolderPath(string folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder) || folder.Length > 32767 || !Path.IsPathFullyQualified(folder) || folder.Any(char.IsControl))
+            throw State("Choose a hybrid model folder using its complete local path.");
+        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        if (OperatingSystem.IsWindows())
+        {
+            var driveRoot = Path.GetPathRoot(fullPath);
+            if (driveRoot is null || driveRoot.Length != 3 || driveRoot[1] != ':')
+                throw State("Choose a hybrid folder on a local Windows drive.");
+        }
+        return fullPath;
+    }
+
+    private static bool SamePath(string first, string second) =>
+        string.Equals(ValidateFolderPath(first), ValidateFolderPath(second), StringComparison.OrdinalIgnoreCase);
+    private static RuntimeException State(string message, Exception? inner = null) => new("hybrid_model_state", message, inner);
+    private static RuntimeException Missing() => new("hybrid_model_missing", "The hybrid folder is incomplete. Finish its download and choose the folder again.");
+    private static RuntimeException Changed() => new("hybrid_model_changed", "The hybrid model files differ from the verified download. Finish the correct download and choose its folder again. Existing files were kept.");
+    private static RuntimeException InvalidConfiguration(Exception? inner = null) => new("hybrid_model_configuration",
+        "This folder does not declare a supported AMD GPU + NPU model. Choose the AMD hybrid export folder itself.", inner);
+    private sealed record ExportConfiguration(string ModelType, int ContextLength);
+    private sealed record Registry(int SchemaVersion, IReadOnlyList<HybridModelRegistration> Models);
+    private sealed record Selection(int SchemaVersion, Guid Id, string Sha256, string ProfileId);
+    private sealed record OpenedFile(string Name, FileStream Stream, DateTime ModifiedUtc);
+    private sealed class ReadLease : IDisposable
+    {
+        public List<OpenedFile> Handles { get; } = [];
+        public IReadOnlyList<HybridModelFile> ModelFiles { get; set; } = [];
+        public ExportConfiguration? Configuration { get; set; }
+        public string? ReadText(string name, int maximumBytes)
+        {
+            var opened = Handles.SingleOrDefault(file => string.Equals(file.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (opened is null || opened.Stream.Length <= 0 || opened.Stream.Length > maximumBytes) return null;
+            opened.Stream.Position = 0;
+            using var reader = new StreamReader(opened.Stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+            return reader.ReadToEnd();
+        }
+        public void Dispose() { foreach (var file in Handles) file.Stream.Dispose(); Handles.Clear(); }
+    }
 }

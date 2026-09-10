@@ -332,4 +332,79 @@ public sealed class HybridModelService
         return new(family + "@" + version, $"hybrid-{sha256}-ryzenai1.7-c{contextLength}", "sha256:" + sha256,
             "user.Winference-Hybrid-" + sha256[..16], ExecutionMode.GpuNpu, contextLength, MaximumOutputTokens);
     }
+
+    private static ExportConfiguration ReadConfiguration(JsonElement root, IReadOnlyList<string> names)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("model", out var model) || model.ValueKind != JsonValueKind.Object ||
+            !model.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String || !IsModelType(type.GetString()) ||
+            !model.TryGetProperty("context_length", out var context) || !context.TryGetInt32(out var contextLength) || contextLength <= 0 ||
+            !model.TryGetProperty("decoder", out var decoder) || decoder.ValueKind != JsonValueKind.Object ||
+            !decoder.TryGetProperty("filename", out var filename) || !RefersToExportFile(filename, names) ||
+            !decoder.TryGetProperty("session_options", out var session) || session.ValueKind != JsonValueKind.Object)
+            throw InvalidConfiguration();
+        var ryzen = RyzenOptions(session) ?? throw InvalidConfiguration();
+        int? sequenceLimit = null;
+        if (ryzen.TryGetProperty("hybrid_opt_max_seq_length", out var limit))
+        {
+            if (limit.ValueKind != JsonValueKind.String || !int.TryParse(limit.GetString(), NumberStyles.None,
+                CultureInfo.InvariantCulture, out var value) || value <= 0) throw InvalidConfiguration();
+            sequenceLimit = value;
+        }
+        if (ryzen.TryGetProperty("external_data_file", out var external) && !RefersToExportFile(external, names))
+            throw InvalidConfiguration();
+        var effective = Math.Min(contextLength, sequenceLimit ?? contextLength);
+        if (effective <= MaximumOutputTokens)
+            throw new RuntimeException("hybrid_model_configuration",
+                "This hybrid export declares a conversation limit too small for a reply. Choose a different export.");
+        return new(type.GetString()!, Math.Min(effective, MaximumContextLength));
+    }
+
+    private static JsonElement? RyzenOptions(JsonElement session)
+    {
+        if (session.TryGetProperty("provider_options", out var providers) && providers.ValueKind == JsonValueKind.Array)
+            foreach (var provider in providers.EnumerateArray())
+                if (provider.ValueKind == JsonValueKind.Object && provider.TryGetProperty("RyzenAI", out var ryzen) &&
+                    ryzen.ValueKind == JsonValueKind.Object) return ryzen;
+        // Older Ryzen AI exports put the same options in config_entries.
+        if (session.TryGetProperty("config_entries", out var entries) && entries.ValueKind == JsonValueKind.Object) return entries;
+        return null;
+    }
+
+    private static bool RefersToExportFile(JsonElement value, IReadOnlyList<string> names) =>
+        value.ValueKind == JsonValueKind.String && value.GetString() is { } name &&
+        IsSafeFileName(name) && names.Contains(name, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Read the export's own identity from its README, falling back to the folder name.</summary>
+    private static (string DisplayName, string RepositoryId) ReadIdentity(string? readme, string directory)
+    {
+        var fallback = FriendlyName(Path.GetFileName(directory));
+        if (string.IsNullOrWhiteSpace(readme)) return (fallback, "");
+        var lines = readme.Replace("\r\n", "\n").Split('\n');
+        string? baseModel = null;
+        var frontMatter = false;
+        var awaitingBaseModel = false;
+        foreach (var raw in lines)
+        {
+            var line = raw.Trim();
+            if (line == "---") { frontMatter = !frontMatter; if (!frontMatter) break; continue; }
+            if (!frontMatter) continue;
+            if (awaitingBaseModel)
+            {
+                if (line.StartsWith("- ", StringComparison.Ordinal)) { baseModel = line[2..].Trim().Trim('"', '\''); break; }
+                awaitingBaseModel = false;
+            }
+            if (!line.StartsWith("base_model:", StringComparison.Ordinal)) continue;
+            var inline = line["base_model:".Length..].Trim().Trim('"', '\'');
+            if (inline.Length != 0) { baseModel = inline; break; }
+            awaitingBaseModel = true;
+        }
+        var heading = lines.Select(line => line.Trim())
+            .Where(line => line.StartsWith("# ", StringComparison.Ordinal))
+            .Select(line => line[2..].Trim())
+            .FirstOrDefault(name => name.Contains('/', StringComparison.Ordinal) && !name.Any(char.IsWhiteSpace));
+        var repositoryId = heading ?? "";
+        var display = baseModel is null ? "" : FriendlyName(baseModel[(baseModel.LastIndexOf('/') + 1)..]);
+        return (display.Length == 0 ? fallback : display, repositoryId);
+    }
 }

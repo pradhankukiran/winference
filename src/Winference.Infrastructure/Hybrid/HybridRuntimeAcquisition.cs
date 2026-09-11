@@ -120,4 +120,66 @@ public sealed class HybridRuntimeAcquisition
         }
         finally { _gate.Release(); }
     }
+
+    /// <summary>
+    /// Read-only trust check. Hashes the original pinned ZIP and compares every extracted
+    /// file against its original ZIP entry, so editing pin.json cannot bless changed code.
+    /// No runtime, helper or device probe is executed.
+    /// </summary>
+    public static async Task<bool> VerifyAsync(HybridRuntimeInstallation installation,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (installation.ReleaseTag != ReleaseTag || installation.ArchiveSha256 != ArchiveSha256 ||
+                !Path.IsPathFullyQualified(installation.RuntimeDirectory) ||
+                !SamePath(installation.ExecutablePath, Path.Combine(installation.RuntimeDirectory, "ryzenai-server.exe")) ||
+                !SamePath(installation.ManifestPath, Path.Combine(installation.RuntimeDirectory, "pin.json")) ||
+                !File.Exists(installation.ManifestPath) || new FileInfo(installation.ManifestPath).Length > 4_194_304)
+                return false;
+            var root = Directory.GetParent(installation.RuntimeDirectory)?.Parent?.FullName;
+            if (root is null) return false;
+            var archivePath = Path.Combine(root, "Downloads", CacheAssetName);
+            if (!File.Exists(archivePath)) return false;
+            await using var archiveFile = new FileStream(archivePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                1024 * 1024, FileOptions.Asynchronous);
+            if (archiveFile.Length != ArchiveBytes ||
+                Convert.ToHexStringLower(await SHA256.HashDataAsync(archiveFile, cancellationToken).ConfigureAwait(false)) != ArchiveSha256)
+                return false;
+            archiveFile.Position = 0;
+            var pin = await AtomicJson.ReadAsync<RuntimePin>(installation.ManifestPath, cancellationToken).ConfigureAwait(false);
+            if (pin is null || pin.SchemaVersion != 1 || pin.ReleaseTag != ReleaseTag || pin.Asset != AssetName ||
+                pin.ZipSha256 != ArchiveSha256 || pin.Files is null || pin.Files.Count == 0)
+                return false;
+            using var archive = new ZipArchive(archiveFile, ZipArchiveMode.Read, leaveOpen: true);
+            var entries = PayloadEntries(archive);
+            if (pin.Files.Count != entries.Count || !entries.Any(item => item.Relative == "ryzenai-server.exe") ||
+                !HasRequiredPayload(entries.Select(item => item.Relative))) return false;
+            var listed = new Dictionary<string, RuntimeFile>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in pin.Files)
+                if (file is null || !SafeRelative(file.Path) || file.Sha256 is not { Length: 64 } ||
+                    file.Sha256.Any(character => !Uri.IsHexDigit(character)) || !listed.TryAdd(file.Path, file)) return false;
+            foreach (var (entry, relative) in entries)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var path = Path.GetFullPath(Path.Combine(installation.RuntimeDirectory, relative.Replace('/', Path.DirectorySeparatorChar)));
+                if (!Inside(installation.RuntimeDirectory, path) || !listed.TryGetValue(relative, out var file) ||
+                    !File.Exists(path) || new FileInfo(path).Length != entry.Length || file.Size != entry.Length ||
+                    IsReparsePoint(path, installation.RuntimeDirectory)) return false;
+                await using var original = entry.Open();
+                var expected = Convert.ToHexStringLower(await SHA256.HashDataAsync(original, cancellationToken).ConfigureAwait(false));
+                if (file.Sha256 != expected || await HashFileAsync(path, cancellationToken).ConfigureAwait(false) != expected) return false;
+            }
+            foreach (var file in EnumerateRuntimeFiles(installation.RuntimeDirectory))
+            {
+                if (SamePath(file, installation.ManifestPath)) continue;
+                if (IsReparsePoint(file, installation.RuntimeDirectory)) return false;
+                var relative = Path.GetRelativePath(installation.RuntimeDirectory, file).Replace('\\', '/');
+                if (!listed.ContainsKey(relative) && ExecutableExtensions.Contains(Path.GetExtension(file))) return false;
+            }
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or ArgumentException or InvalidDataException or RuntimeException)
+        { return false; }
+    }
 }

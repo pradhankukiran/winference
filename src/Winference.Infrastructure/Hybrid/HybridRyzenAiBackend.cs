@@ -105,4 +105,88 @@ public sealed class HybridRyzenAiBackend(
         }
         catch { await StopAsync(CancellationToken.None); throw; }
     }
+
+    public async IAsyncEnumerable<GenerationEvent> GenerateAsync(RuntimeSession session, GenerationRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (_session is null || _session.SessionId != session.SessionId || session.Profile != registration.Profile ||
+            request.ProfileId != session.Profile.ProfileId || request.SessionRevision != session.Revision || _http is null)
+            throw new RuntimeException("hybrid_session", "The selected hybrid session changed. Load it again before sending.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromMinutes(3));
+        var token = deadline.Token;
+        _ = await ProveReadyAsync(token);
+        var promptCount = await CountPromptTokensAsync(session, request.Messages, token);
+        LastPromptTokenCount = promptCount.Tokens;
+        if ((long)LastPromptTokenCount + request.MaxOutputTokens > session.EffectiveContextLength)
+            throw new RuntimeException("hybrid_context", "This conversation and reply exceed the selected hybrid context.");
+        using var message = new HttpRequestMessage(HttpMethod.Post, new Uri(session.Endpoint, "chat/completions"))
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                model = session.Profile.ProviderModelId, messages = request.Messages.Select(item => new { role = item.Role, content = item.Content }),
+                stream = true, max_tokens = request.MaxOutputTokens, expected_prompt_tokens = LastPromptTokenCount,
+                temperature = request.Temperature
+            }), Encoding.UTF8, "application/json")
+        };
+        using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token);
+        if (!response.IsSuccessStatusCode)
+        {
+            using var errorStream = await response.Content.ReadAsStreamAsync(token);
+            var bytes = new byte[1024]; var count = await errorStream.ReadAsync(bytes, token);
+            LastControlError = Encoding.UTF8.GetString(bytes, 0, count);
+            throw new RuntimeException("hybrid_request", "The hybrid request was refused. Shorten the conversation or reload the selected model.");
+        }
+        if (response.Content.Headers.ContentType?.MediaType != "text/event-stream")
+            throw new RuntimeException("hybrid_stream", "The hybrid worker did not return a supported streamed reply.");
+        var usageSeen = false;
+        await using var stream = await response.Content.ReadAsStreamAsync(token);
+        await foreach (var item in CompletionStreamReader.ReadAsync(stream, token))
+        {
+            if (item.Kind == GenerationEventKind.Usage)
+            {
+                if (item.Usage?.PromptTokens != LastPromptTokenCount || item.Usage.CompletionTokens is not { } output || output < 0 || output > request.MaxOutputTokens)
+                    throw new RuntimeException("hybrid_tokenizer", "The native token usage differs from the selected hybrid profile.");
+                usageSeen = true;
+            }
+            if (item.Kind == GenerationEventKind.Completed)
+            {
+                if (!usageSeen || item.FinishReason is not ("stop" or "length"))
+                    throw new RuntimeException("hybrid_stream", "The hybrid reply did not confirm its completion and token usage.");
+                _ = await ProveReadyAsync(token);
+            }
+            yield return item;
+        }
+    }
+
+    public async Task<PromptTokenCount> CountPromptTokensAsync(RuntimeSession session,
+        IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken)
+    {
+        if (_session is null || _session.SessionId != session.SessionId || session.Profile != registration.Profile || _http is null)
+            throw new RuntimeException("hybrid_session", "The selected hybrid session changed. Load it again before sending.");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        var token = deadline.Token;
+        _ = await ProveReadyAsync(token);
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(session.Endpoint, "tokenize"))
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                model = session.Profile.ProviderModelId, max_tokens = session.Profile.MaxOutputTokens,
+                messages = messages.Select(item => new { role = item.Role, content = item.Content })
+            }), Encoding.UTF8, "application/json")
+        };
+        using var response = await _http.SendAsync(request, token);
+        if (!response.IsSuccessStatusCode)
+            throw new RuntimeException("hybrid_tokenizer", "The selected hybrid worker could not count this conversation. Reload it and retry.");
+        using var budget = JsonDocument.Parse(await response.Content.ReadAsByteArrayAsync(token));
+        var value = budget.RootElement;
+        if (value.GetProperty("session").GetString() != _nonce.ToString("N") ||
+            value.GetProperty("model_id").GetString() != registration.ModelId ||
+            value.GetProperty("context_length").GetInt32() != session.EffectiveContextLength)
+            throw new RuntimeException("hybrid_tokenizer", "The selected hybrid tokenizer or session changed.");
+        var count = value.GetProperty("prompt_tokens").GetInt32();
+        if (count < 1) throw new RuntimeException("hybrid_tokenizer", "The hybrid worker returned an invalid token count.");
+        return new(count, true);
+    }
 }

@@ -189,4 +189,84 @@ public sealed class HybridRyzenAiBackend(
         if (count < 1) throw new RuntimeException("hybrid_tokenizer", "The hybrid worker returned an invalid token count.");
         return new(count, true);
     }
+
+    public async Task StopAsync(CancellationToken token)
+    {
+        await _stopGate.WaitAsync(token);
+        try
+        {
+            _session = null;
+            if (_owned is { } owned)
+            {
+                if (!owned.HasExited && _http is { } client && LoopbackListener.IsOwned(_port, owned.ProcessId))
+                {
+                    using var grace = CancellationTokenSource.CreateLinkedTokenSource(token);
+                    grace.CancelAfter(TimeSpan.FromSeconds(2));
+                    try
+                    {
+                        using var response = await client.PostAsync(new Uri(client.BaseAddress!, "/shutdown"), new StringContent(""), grace.Token);
+                        if (response.IsSuccessStatusCode) await owned.WaitForExitAsync(grace.Token);
+                    }
+                    catch (Exception error) when (error is HttpRequestException or OperationCanceledException or IOException) { }
+                }
+                await owned.StopAsync(token);
+                LastDiagnostics = owned.Diagnostics;
+                owned.Dispose(); _owned = null;
+            }
+            if (_sessionDirectory is { } directory)
+            {
+                HybridWorker.RemoveWorkingCopy(Path.Combine(directory, "model"));
+                _sessionDirectory = null;
+            }
+            _http?.Dispose(); _http = null;
+            _modelLease?.Dispose(); _modelLease = null;
+            foreach (var file in _componentLeases) file.Dispose();
+            _componentLeases.Clear();
+        }
+        finally { _stopGate.Release(); }
+    }
+
+    private async Task<string> ProveReadyAsync(CancellationToken token)
+    {
+        var owned = _owned ?? throw new RuntimeException("hybrid_ownership", "The hybrid worker is no longer owned by this app.");
+        if (owned.HasExited || !owned.GetProcessIds().Contains(owned.ProcessId) ||
+            !SamePath(owned.GetImagePath(owned.ProcessId), workerExecutable) || !LoopbackListener.IsOwned(_port, owned.ProcessId))
+            throw new RuntimeException("hybrid_ownership", "The selected hybrid worker or its local connection could not be verified.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        using var response = await _http!.GetAsync(new Uri(_http.BaseAddress!, "/health"), HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        response.EnsureSuccessStatusCode();
+        var bytes = await response.Content.ReadAsByteArrayAsync(timeout.Token);
+        if (bytes.Length > 32768) throw new RuntimeException("hybrid_protocol", "The hybrid worker returned oversized readiness data.");
+        using var document = JsonDocument.Parse(bytes);
+        var health = document.RootElement;
+        if (health.GetProperty("status").GetString() != "ok" || health.GetProperty("protocol").GetString() != HybridWorker.ProtocolVersion ||
+            health.GetProperty("session").GetString() != _nonce.ToString("N") || health.GetProperty("pid").GetInt32() != owned.ProcessId ||
+            health.GetProperty("execution_mode").GetString() != "hybrid" || health.GetProperty("provider").GetString() != "RyzenAI" ||
+            health.GetProperty("native_device").GetString() != "RyzenAI" ||
+            !ModelTypeMatches(health.GetProperty("model_type").GetString(), registration.ModelType) ||
+            !SamePath(health.GetProperty("source_model_path").GetString()!, registration.ModelDirectory) ||
+            !SamePath(health.GetProperty("model_path").GetString()!, Path.Combine(_sessionDirectory!, "model")) ||
+            health.GetProperty("model_id").GetString() != registration.ModelId || health.GetProperty("model_sha256").GetString() != registration.Sha256 ||
+            health.GetProperty("runtime_archive_sha256").GetString() != runtime.ArchiveSha256 ||
+            health.GetProperty("context_length").GetInt32() != registration.ContextLength)
+            throw new RuntimeException("hybrid_route", "The selected hybrid worker, model and context could not be verified. No fallback was accepted.");
+        foreach (var name in new[] { "onnxruntime.dll", "onnxruntime-genai.dll", "onnxruntime_providers_ryzenai.dll" })
+            if (!SamePath(health.GetProperty("modules").GetProperty(name).GetString()!, Path.Combine(runtime.RuntimeDirectory, name)))
+                throw new RuntimeException("hybrid_native_identity", "The AMD hybrid worker loaded different native libraries.");
+        if (owned.HasExited || !LoopbackListener.IsOwned(_port, owned.ProcessId)) throw new RuntimeException("hybrid_ownership", "The hybrid worker stopped during readiness verification.");
+        return JsonSerializer.Serialize(new
+        {
+            workerPid = owned.ProcessId, workerStartUtc = owned.StartedUtc, workerPath = Path.GetFullPath(workerExecutable),
+            jobContainsWorker = true, workerOwnsListener = true, port = _port,
+            executionMode = "hybrid", provider = "RyzenAI", nativeDevice = health.GetProperty("native_device").GetString(),
+            checkpoint = registration.ModelDirectory, modelSha256 = registration.Sha256, modelId = registration.ModelId,
+            workingModel = health.GetProperty("model_path").GetString(),
+            repository = registration.RepositoryId, revision = registration.Revision, context = registration.ContextLength,
+            runtimeArchiveSha256 = runtime.ArchiveSha256, nativeModules = health.GetProperty("modules"), hardware = _hardware
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+    private static bool ModelTypeMatches(string? served, string expected) =>
+        expected.Length == 0 || string.Equals(served, expected, StringComparison.Ordinal);
+    private static bool SamePath(string first, string second) => string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), StringComparison.OrdinalIgnoreCase);
 }

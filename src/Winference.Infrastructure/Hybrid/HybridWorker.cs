@@ -350,4 +350,53 @@ public static class HybridWorker
     { await WriteHeaderAsync(stream, status, "application/json"); await stream.WriteAsync(JsonSerializer.SerializeToUtf8Bytes(value, Json)); await stream.FlushAsync(); }
     private static async Task WriteEventAsync(Stream stream, object value)
     { await stream.WriteAsync(Encoding.UTF8.GetBytes("data: " + JsonSerializer.Serialize(value, Json) + "\n\n")); await stream.FlushAsync(); }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateHardLink(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+
+    // Signatures follow microsoft/onnxruntime-genai v0.11.2 src/ort_genai_c.h (MIT).
+    private static class Oga
+    {
+        private const string Library = "winference-genai";
+        public static void Check(IntPtr result)
+        {
+            if (result == IntPtr.Zero) return;
+            // Native messages may include model contents or local paths. Keep the
+            // user-facing error bounded; the selected model can be reloaded.
+            OgaDestroyResult(result);
+            throw new RuntimeException("hybrid_native_operation", "The native AMD runtime could not complete this operation.");
+        }
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr LoadLibraryEx(string name, IntPtr file, uint flags);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] [return: MarshalAs(UnmanagedType.Bool)] public static extern bool SetDllDirectory(string directory);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaCreateModel([MarshalAs(UnmanagedType.LPUTF8Str)] string path, out IntPtr model);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaModelGetDeviceType(IntPtr model, out IntPtr device);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaCreateTokenizer(IntPtr model, out IntPtr tokenizer);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaTokenizerApplyChatTemplate(IntPtr tokenizer,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string template, [MarshalAs(UnmanagedType.LPUTF8Str)] string messages,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string tools, [MarshalAs(UnmanagedType.I1)] bool addGenerationPrompt, out IntPtr text);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaCreateSequences(out IntPtr sequences);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaTokenizerEncode(IntPtr tokenizer, [MarshalAs(UnmanagedType.LPUTF8Str)] string text, IntPtr sequences);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern nuint OgaSequencesGetSequenceCount(IntPtr sequences, nuint index);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaSequencesGetSequenceData(IntPtr sequences, nuint index);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaCreateGeneratorParams(IntPtr model, out IntPtr parameters);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaGeneratorParamsSetSearchNumber(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, double value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaGeneratorParamsSetSearchBool(IntPtr parameters, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.I1)] bool value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaCreateGenerator(IntPtr model, IntPtr parameters, out IntPtr generator);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaCreateTokenizerStream(IntPtr tokenizer, out IntPtr decoder);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaGenerator_AppendTokens(IntPtr generator, IntPtr tokens, nuint count);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] [return: MarshalAs(UnmanagedType.I1)] public static extern bool OgaGenerator_IsDone(IntPtr generator);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaGenerator_GenerateNextToken(IntPtr generator);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaGenerator_GetNextTokens(IntPtr generator, out IntPtr tokens, out nuint count);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern IntPtr OgaTokenizerStreamDecode(IntPtr decoder, int token, out IntPtr text);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroyResult(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroyString(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroyModel(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroyTokenizer(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroySequences(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroyGeneratorParams(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroyGenerator(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaDestroyTokenizerStream(IntPtr value);
+        [DllImport(Library, CallingConvention = CallingConvention.Cdecl)] public static extern void OgaShutdown();
+    }
 }

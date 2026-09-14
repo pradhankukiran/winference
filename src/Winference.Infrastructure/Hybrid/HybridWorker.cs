@@ -172,4 +172,118 @@ public static class HybridWorker
             RemoveWorkingCopy(workingModel);
         }
     }
+
+    /// <summary>
+    /// Render with the export's own chat template through onnxruntime-genai.
+    /// The two built-in renderers stay as a fallback for exports without one.
+    /// </summary>
+    private static string RenderPrompt(string modelDirectory, string modelType, IReadOnlyList<ChatMessage> messages,
+        string sessionDate, IntPtr tokenizer)
+    {
+        HybridPromptRenderer.Validate(messages);
+        var template = ReadChatTemplate(modelDirectory);
+        var payload = JsonSerializer.Serialize(messages.Select(message => new { role = message.Role, content = message.Content }));
+        IntPtr result = Oga.OgaTokenizerApplyChatTemplate(tokenizer, template, payload, "", true, out var rendered);
+        if (result == IntPtr.Zero && rendered != IntPtr.Zero)
+        {
+            try
+            {
+                var prompt = Marshal.PtrToStringUTF8(rendered);
+                if (!string.IsNullOrEmpty(prompt))
+                {
+                    if (prompt.Length > 262144)
+                        throw new RuntimeException("hybrid_context", "This message is too large. Shorten it or start a new chat.");
+                    return prompt;
+                }
+            }
+            finally { Oga.OgaDestroyString(rendered); }
+        }
+        else if (result != IntPtr.Zero) Oga.OgaDestroyResult(result);
+        return HybridPromptRenderer.Render(modelType, messages, sessionDate);
+    }
+
+    private static string ReadChatTemplate(string directory)
+    {
+        var path = Path.Combine(directory, "chat_template.jinja");
+        if (File.Exists(path) && new FileInfo(path).Length is > 0 and <= 262144) return File.ReadAllText(path);
+        path = Path.Combine(directory, "tokenizer_config.json");
+        if (!File.Exists(path) || new FileInfo(path).Length is <= 0 or > 4 * 1024 * 1024) return "";
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (!document.RootElement.TryGetProperty("chat_template", out var template)) return "";
+            if (template.ValueKind == JsonValueKind.String) return template.GetString() ?? "";
+            if (template.ValueKind == JsonValueKind.Array)
+                foreach (var item in template.EnumerateArray())
+                    if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("template", out var text) &&
+                        text.ValueKind == JsonValueKind.String) return text.GetString() ?? "";
+        }
+        catch (JsonException) { }
+        return "";
+    }
+
+    private static HashSet<int> EndTokenIds(JsonElement model)
+    {
+        var ids = new HashSet<int>();
+        if (!model.TryGetProperty("eos_token_id", out var eos)) return ids;
+        if (eos.ValueKind == JsonValueKind.Number && eos.TryGetInt32(out var single)) ids.Add(single);
+        else if (eos.ValueKind == JsonValueKind.Array)
+            foreach (var item in eos.EnumerateArray())
+                if (item.ValueKind == JsonValueKind.Number && item.TryGetInt32(out var id)) ids.Add(id);
+        return ids;
+    }
+
+    private static async Task GenerateAsync(Stream stream, IntPtr model, IntPtr tokenizer, IntPtr sequences, int promptTokens, int maximum, IReadOnlySet<int> eos, double temperature)
+    {
+        IntPtr parameters = IntPtr.Zero, generator = IntPtr.Zero, decoder = IntPtr.Zero;
+        try
+        {
+            Oga.Check(Oga.OgaCreateGeneratorParams(model, out parameters));
+            Oga.Check(Oga.OgaGeneratorParamsSetSearchNumber(parameters, "max_length", promptTokens + maximum));
+            Oga.Check(Oga.OgaGeneratorParamsSetSearchBool(parameters, "do_sample", true));
+            Oga.Check(Oga.OgaGeneratorParamsSetSearchNumber(parameters, "random_seed", 1));
+            Oga.Check(Oga.OgaGeneratorParamsSetSearchNumber(parameters, "temperature", Math.Max(0.01, temperature)));
+            Oga.Check(Oga.OgaCreateGenerator(model, parameters, out generator));
+            Oga.Check(Oga.OgaCreateTokenizerStream(tokenizer, out decoder));
+            var clock = Stopwatch.StartNew();
+            Console.WriteLine(JsonSerializer.Serialize(new { phase = "prefill", pid = Environment.ProcessId, utc = DateTimeOffset.UtcNow, promptTokens }));
+            Oga.Check(Oga.OgaGenerator_AppendTokens(generator, Oga.OgaSequencesGetSequenceData(sequences, 0), (nuint)promptTokens));
+            var generated = 0;
+            var first = TimeSpan.Zero;
+            var reason = "stop";
+            while (!Oga.OgaGenerator_IsDone(generator))
+            {
+                Oga.Check(Oga.OgaGenerator_GenerateNextToken(generator));
+                // Finished sequences can retain their previous last element.
+                // Decode only tokens returned for this generation step.
+                Oga.Check(Oga.OgaGenerator_GetNextTokens(generator, out var tokens, out var tokenCount));
+                if (tokenCount == 0 && Oga.OgaGenerator_IsDone(generator)) break;
+                if (tokenCount != 1 || tokens == IntPtr.Zero)
+                    throw new RuntimeException("hybrid_native_tokens", "The native runtime returned an unsupported token batch.");
+                var token = Marshal.ReadInt32(tokens);
+                generated++;
+                if (generated == 1)
+                {
+                    first = clock.Elapsed;
+                    Console.WriteLine(JsonSerializer.Serialize(new { phase = "decode", pid = Environment.ProcessId, utc = DateTimeOffset.UtcNow, firstTokenMs = first.TotalMilliseconds }));
+                }
+                if (eos.Contains(token)) break;
+                Oga.Check(Oga.OgaTokenizerStreamDecode(decoder, token, out var text));
+                var delta = Marshal.PtrToStringUTF8(text);
+                if (!string.IsNullOrEmpty(delta)) await WriteEventAsync(stream, new { choices = new[] { new { index = 0, delta = new { content = delta } } } });
+                if (generated >= maximum) { reason = "length"; break; }
+            }
+            await WriteEventAsync(stream, new { choices = new[] { new { index = 0, delta = new { }, finish_reason = reason } } });
+            await WriteEventAsync(stream, new { choices = Array.Empty<object>(), usage = new { prompt_tokens = promptTokens, completion_tokens = generated, total_tokens = promptTokens + generated } });
+            await stream.WriteAsync("data: [DONE]\n\n"u8.ToArray());
+            await stream.FlushAsync();
+            Console.WriteLine(JsonSerializer.Serialize(new { phase = "complete", pid = Environment.ProcessId, utc = DateTimeOffset.UtcNow, promptTokens, completionTokens = generated, elapsedMs = clock.Elapsed.TotalMilliseconds }));
+        }
+        finally
+        {
+            if (decoder != IntPtr.Zero) Oga.OgaDestroyTokenizerStream(decoder);
+            if (generator != IntPtr.Zero) Oga.OgaDestroyGenerator(generator);
+            if (parameters != IntPtr.Zero) Oga.OgaDestroyGeneratorParams(parameters);
+        }
+    }
 }

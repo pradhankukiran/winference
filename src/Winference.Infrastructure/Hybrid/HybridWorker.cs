@@ -286,4 +286,68 @@ public static class HybridWorker
             if (parameters != IntPtr.Zero) Oga.OgaDestroyGeneratorParams(parameters);
         }
     }
+
+    private static void LoadNative(string directory)
+    {
+        // Load ORT before GenAI's static imports can bind to the OS copy.
+        var ort = Oga.LoadLibraryEx(Path.Combine(directory, "onnxruntime.dll"), IntPtr.Zero, 0x1100);
+        var genai = ort == IntPtr.Zero ? IntPtr.Zero : Oga.LoadLibraryEx(Path.Combine(directory, "onnxruntime-genai.dll"), IntPtr.Zero, 0x1100);
+        if (genai == IntPtr.Zero || !Oga.SetDllDirectory(directory))
+            throw new RuntimeException("hybrid_native_load", "The native AMD runtime could not be loaded.");
+        NativeLibrary.SetDllImportResolver(typeof(Oga).Assembly, (name, _, _) => name == "winference-genai" ? genai : IntPtr.Zero);
+    }
+
+    private static Dictionary<string, string> NativeModules()
+    {
+        using var process = Process.GetCurrentProcess();
+        return process.Modules.Cast<ProcessModule>().Where(module => module.ModuleName.StartsWith("onnxruntime", StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(module => module.ModuleName, module => module.FileName, StringComparer.OrdinalIgnoreCase);
+    }
+    private static bool SamePath(string first, string second) => string.Equals(Path.GetFullPath(first), Path.GetFullPath(second), StringComparison.OrdinalIgnoreCase);
+    internal static void RemoveWorkingCopy(string directory)
+    {
+        // This session owns the copy. Delete only its top-level regular files;
+        // unexpected folders and links are preserved and never traversed.
+        if (!Directory.Exists(directory) || (File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return;
+        foreach (var path in Directory.EnumerateFiles(directory))
+        {
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) continue;
+            File.Delete(path);
+        }
+        if (!Directory.EnumerateFileSystemEntries(directory).Any()) Directory.Delete(directory);
+    }
+    private sealed record Request(string Method, string Path, string? Authorization, byte[] Body);
+    private static async Task<Request> ReadRequestAsync(Stream stream, CancellationToken token)
+    {
+        using var header = new MemoryStream();
+        var single = new byte[1];
+        var last = 0;
+        while (last != 0x0d0a0d0a)
+        {
+            if (header.Length >= 16384 || await stream.ReadAsync(single, token) != 1) throw new IOException("Invalid private HTTP header.");
+            header.WriteByte(single[0]); last = (last << 8) | single[0];
+        }
+        var lines = Encoding.ASCII.GetString(header.ToArray()).Split("\r\n");
+        var first = lines[0].Split(' ');
+        if (first.Length != 3 || first[2] != "HTTP/1.1") throw new IOException("Invalid private HTTP request.");
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in lines.Skip(1).Where(line => line.Length > 0))
+        {
+            var colon = line.IndexOf(':');
+            if (colon < 1 || !headers.TryAdd(line[..colon], line[(colon + 1)..].Trim())) throw new IOException("Invalid private HTTP field.");
+        }
+        if (headers.ContainsKey("Transfer-Encoding")) throw new IOException("Private requests require Content-Length.");
+        var length = 0;
+        if (headers.TryGetValue("Content-Length", out var value) && (!int.TryParse(value, out length) || length is < 0 or > 262144))
+            throw new IOException("Invalid private HTTP body length.");
+        var body = new byte[length];
+        await stream.ReadExactlyAsync(body, token);
+        return new(first[0], first[1], headers.GetValueOrDefault("Authorization"), body);
+    }
+    private static Task WriteHeaderAsync(Stream stream, int status, string type) => stream.WriteAsync(Encoding.ASCII.GetBytes(
+        $"HTTP/1.1 {status} {(status == 200 ? "OK" : "Error")}\r\nContent-Type: {type}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n")).AsTask();
+    private static async Task WriteJsonAsync(Stream stream, int status, object value)
+    { await WriteHeaderAsync(stream, status, "application/json"); await stream.WriteAsync(JsonSerializer.SerializeToUtf8Bytes(value, Json)); await stream.FlushAsync(); }
+    private static async Task WriteEventAsync(Stream stream, object value)
+    { await stream.WriteAsync(Encoding.UTF8.GetBytes("data: " + JsonSerializer.Serialize(value, Json) + "\n\n")); await stream.FlushAsync(); }
 }

@@ -61,4 +61,75 @@ public sealed class LemonadeMediaService : IAsyncDisposable
             }
         }
     }
+
+    public bool IsInstalled(string model) => Installed.Contains(model);
+
+    /// <summary>Downloads a model, then loads it once so Lemonade fetches and verifies its engine.</summary>
+    public async Task InstallAsync(string model, IProgress<MediaDownloadProgress> progress, IProgress<string> stage, CancellationToken token)
+    {
+        RequireKnown(model);
+        await UseAsync(async http =>
+        {
+            stage.Report("Downloading");
+            using var request = new HttpRequestMessage(HttpMethod.Post, "pull") { Content = JsonContent.Create(new { model_name = model, stream = true }) };
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            await EnsureSuccessAsync(response, token).ConfigureAwait(false);
+            await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            var parser = new PullStreamParser();
+            var completed = false;
+            while (await reader.ReadLineAsync(token).ConfigureAwait(false) is { } line)
+            {
+                if (parser.Feed(line) is not { } update) continue;
+                progress.Report(update);
+                if (update.Complete) { completed = true; break; }
+            }
+            if (!completed) throw new RuntimeException("media_download", "The download stopped before it finished. Check your internet connection and try again.");
+
+            // The first load installs the engine. Unload afterwards so memory is free until it's used.
+            stage.Report("Setting up");
+            await PostAsync(http, "load", new { model_name = model }, token, TimeSpan.FromMinutes(10)).ConfigureAwait(false);
+            await PostAsync(http, "unload", new { model_name = model }, token, TimeSpan.FromMinutes(1)).ConfigureAwait(false);
+            return true;
+        }, token).ConfigureAwait(false);
+        SetInstalled(model, true);
+    }
+
+    public async Task RemoveAsync(string model, CancellationToken token)
+    {
+        RequireKnown(model);
+        await UseAsync(async http =>
+        {
+            try { await PostAsync(http, "unload", new { model_name = model }, token, TimeSpan.FromMinutes(1)).ConfigureAwait(false); }
+            catch (RuntimeException) { }
+            await PostAsync(http, "delete", new { model_name = model }, token, TimeSpan.FromMinutes(2)).ConfigureAwait(false);
+            return true;
+        }, token).ConfigureAwait(false);
+        SetInstalled(model, false);
+        // The engine's files are locked while the server runs, so stop it before cleaning up.
+        await StopAsync().ConfigureAwait(false);
+        try
+        {
+            MediaAddons.CleanUp(MediaAddons.Find(model)!, Installed, Path.Combine(_root, "models"), Path.Combine(_root, "cache", "bin"));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new RuntimeException("media_cleanup", "The add-on was removed, but some of its files couldn't be deleted. Close other apps using them and try again.", error);
+        }
+    }
+
+    /// <summary>Turns a WAV recording into text.</summary>
+    public Task<string> TranscribeAsync(string model, byte[] wav, CancellationToken token) => UseAsync(async http =>
+    {
+        using var form = new MultipartFormDataContent();
+        var audio = new ByteArrayContent(wav);
+        audio.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        form.Add(audio, "file", "speech.wav");
+        form.Add(new StringContent(model), "model");
+        using var timeout = Timeout(token, TimeSpan.FromMinutes(3));
+        using var response = await http.PostAsync("audio/transcriptions", form, timeout.Token).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, token).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false), cancellationToken: timeout.Token).ConfigureAwait(false);
+        return document.RootElement.TryGetProperty("text", out var text) ? text.GetString()?.Trim() ?? string.Empty : string.Empty;
+    }, token);
 }

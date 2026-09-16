@@ -211,4 +211,84 @@ public sealed class LemonadeBackend(RuntimeInstallation installation) : IRuntime
         // Fall back to conservative estimate if local tokenizer is unavailable
         return PromptTokenCount.Estimate(messages);
     }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_owned is not null)
+            {
+                // Cancelling an HTTP stream alone does not settle NPU work. Terminate
+                // only the retained job, then wait for every owned descendant to exit.
+                await _owned.StopAsync(CancellationToken.None).ConfigureAwait(false);
+                LastDiagnostics = _owned.Diagnostics;
+                _owned.Dispose(); _owned = null;
+            }
+            _contextBudget?.Dispose();
+            _contextBudget = null;
+            _session = null;
+            _http?.Dispose(); _http = null;
+            if (_sessionDirectory is not null)
+            {
+                // This uniquely named directory was created by this backend only.
+                try { Directory.Delete(_sessionDirectory, true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                _sessionDirectory = null;
+            }
+        }
+        finally { _stopGate.Release(); }
+    }
+
+    public static Uri ApiUri(Uri apiBase, string relativePath)
+    {
+        if (apiBase.Scheme != "http" || apiBase.Host != "127.0.0.1" || apiBase.Query.Length != 0 ||
+            apiBase.Fragment.Length != 0 || apiBase.AbsolutePath != "/api/v1/" || relativePath.StartsWith('/') ||
+            relativePath.Contains("..") || relativePath.Contains(':') || relativePath.Contains('\\'))
+            throw new ArgumentException("Use the qualified loopback API base and a relative operation path.");
+        return new Uri(apiBase, relativePath);
+    }
+
+    private async Task<JsonDocument> GetJsonAsync(string path, CancellationToken token)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        using var response = await _http!.GetAsync(ApiUri(_http.BaseAddress!, path), HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode) throw MapHttpError((int)response.StatusCode);
+        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+        return await JsonDocument.ParseAsync(stream, cancellationToken: timeout.Token).ConfigureAwait(false);
+    }
+
+    private async Task<JsonDocument> PostJsonAsync(string path, object body, CancellationToken token)
+    {
+        var client = _http ?? throw new RuntimeException("session_stopped", "The AI session has stopped. Connect again.");
+        using var response = await client.PostAsJsonAsync(ApiUri(client.BaseAddress!, path), body, token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            var bytes = new byte[8192];
+            await using var errorStream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+            var count = await errorStream.ReadAsync(bytes, token).ConfigureAwait(false);
+            LastControlError = $"HTTP {(int)response.StatusCode}: " + System.Text.Encoding.UTF8.GetString(bytes, 0, count);
+            throw MapHttpError((int)response.StatusCode);
+        }
+        await using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        var document = await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
+        if (document.RootElement.TryGetProperty("status", out var status) && status.GetString() == "error")
+        {
+            document.Dispose();
+            throw new RuntimeException("model_start_failed", "The model could not load. Check the NPU driver and existing model installation, then retry.");
+        }
+        return document;
+    }
+
+    private static RuntimeException MapHttpError(int code) => code switch
+    {
+        400 or 413 or 422 => new("request_rejected", "The model could not accept this request. Shorten the message or start a new chat; check the selected model's context limit."),
+        401 or 403 => new("authentication", "The app could not authenticate with its AI server. Connect again."),
+        _ => new("runtime_request", "The local AI request failed. Check the runtime and retry.")
+    };
+    private static bool SamePath(string a, string b) => Path.GetFullPath(a).Equals(Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+    private static bool HasPair(string[] command, string flag, string value) =>
+        Enumerable.Range(0, Math.Max(0, command.Length - 1)).Any(i => command[i] == flag && command[i + 1] == value);
 }

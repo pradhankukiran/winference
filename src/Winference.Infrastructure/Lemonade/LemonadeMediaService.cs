@@ -132,4 +132,91 @@ public sealed class LemonadeMediaService : IAsyncDisposable
         using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false), cancellationToken: timeout.Token).ConfigureAwait(false);
         return document.RootElement.TryGetProperty("text", out var text) ? text.GetString()?.Trim() ?? string.Empty : string.Empty;
     }, token);
+
+    public const int EmbeddingBatch = 32;
+
+    /// <summary>One embedding per input, in order. Inputs are sent in batches.</summary>
+    public Task<float[][]> EmbedAsync(string model, IReadOnlyList<string> inputs, CancellationToken token) => UseAsync(async http =>
+    {
+        var result = new List<float[]>(inputs.Count);
+        for (var start = 0; start < inputs.Count; start += EmbeddingBatch)
+        {
+            var batch = inputs.Skip(start).Take(EmbeddingBatch).ToArray();
+            using var timeout = Timeout(token, TimeSpan.FromMinutes(5));
+            using var response = await http.PostAsJsonAsync("embeddings", new { model, input = batch }, timeout.Token).ConfigureAwait(false);
+            await EnsureSuccessAsync(response, token).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false), cancellationToken: timeout.Token).ConfigureAwait(false);
+            result.AddRange(ParseEmbeddings(document.RootElement, batch.Length));
+        }
+        return result.ToArray();
+    }, token);
+
+    /// <summary>Reads an OpenAI-style embeddings response, ordered by each item's index.</summary>
+    public static float[][] ParseEmbeddings(JsonElement root, int expected)
+    {
+        var items = root.GetProperty("data").EnumerateArray()
+            .Select((item, position) => (Index: item.TryGetProperty("index", out var index) ? index.GetInt32() : position,
+                Vector: item.GetProperty("embedding").EnumerateArray().Select(value => value.GetSingle()).ToArray()))
+            .OrderBy(item => item.Index).Select(item => item.Vector).ToArray();
+        if (items.Length != expected || items.Any(vector => vector.Length == 0))
+            throw new RuntimeException("media_embeddings", "The search engine returned an incomplete answer.");
+        return items;
+    }
+
+    /// <summary>Speaks text with a Kokoro voice. Returns WAV bytes.</summary>
+    public Task<byte[]> SpeakAsync(string model, string voice, string text, CancellationToken token) => UseAsync(async http =>
+    {
+        using var timeout = Timeout(token, TimeSpan.FromMinutes(3));
+        using var response = await http.PostAsJsonAsync("audio/speech",
+            new { model, input = text, voice, response_format = "wav" }, timeout.Token).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, token).ConfigureAwait(false);
+        return await response.Content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
+    }, token);
+
+    /// <summary>Creates one image. Returns PNG bytes.</summary>
+    public Task<byte[]> GenerateImageAsync(string model, string prompt, CancellationToken token) => UseAsync(async http =>
+    {
+        using var timeout = Timeout(token, TimeSpan.FromMinutes(10));
+        using var response = await http.PostAsJsonAsync("images/generations",
+            new { model, prompt, n = 1, size = "512x512", response_format = "b64_json" }, timeout.Token).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, token).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false), cancellationToken: timeout.Token).ConfigureAwait(false);
+        var data = document.RootElement.GetProperty("data");
+        if (data.GetArrayLength() == 0 || !data[0].TryGetProperty("b64_json", out var image))
+            throw new RuntimeException("media_image", "The image engine returned no picture. Try a different description.");
+        return Convert.FromBase64String(image.GetString()!);
+    }, token);
+
+    public async Task StopAsync()
+    {
+        await _startGate.WaitAsync().ConfigureAwait(false);
+        try { await StopCoreAsync().ConfigureAwait(false); }
+        finally { _startGate.Release(); }
+    }
+
+    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+
+    /// <summary>Runs one request against the started server and restarts the idle countdown afterwards.</summary>
+    private async Task<T> UseAsync<T>(Func<HttpClient, Task<T>> work, CancellationToken token)
+    {
+        Interlocked.Increment(ref _busy);
+        _idle?.Cancel();
+        try
+        {
+            var http = await EnsureStartedAsync(token).ConfigureAwait(false);
+            try { return await work(http).ConfigureAwait(false); }
+            catch (HttpRequestException error)
+            {
+                throw new RuntimeException("media_request", "Winference couldn't reach its media engine. Try again.", error);
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                throw new RuntimeException("media_timeout", "The media engine took too long to answer. Try again.");
+            }
+        }
+        finally
+        {
+            if (Interlocked.Decrement(ref _busy) == 0) ScheduleIdleStop();
+        }
+    }
 }

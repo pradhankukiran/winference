@@ -299,4 +299,65 @@ public sealed class LemonadeMediaService : IAsyncDisposable
         }
         finally { _startGate.Release(); }
     }
+
+    private async Task StopCoreAsync()
+    {
+        _http?.Dispose();
+        _http = null;
+        if (_owned is { } owned)
+        {
+            _owned = null;
+            try { await owned.StopAsync(CancellationToken.None).ConfigureAwait(false); }
+            finally { owned.Dispose(); }
+        }
+    }
+
+    private static async Task PostAsync(HttpClient http, string path, object body, CancellationToken token, TimeSpan limit)
+    {
+        using var timeout = Timeout(token, limit);
+        using var response = await http.PostAsJsonAsync(path, body, timeout.Token).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, token).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken token)
+    {
+        if (response.IsSuccessStatusCode) return;
+        var detail = string.Empty;
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(body);
+            var error = document.RootElement.GetProperty("error");
+            detail = error.ValueKind == JsonValueKind.String ? error.GetString()! : error.GetProperty("message").GetString()!;
+        }
+        catch (Exception error) when (error is JsonException or KeyNotFoundException or InvalidOperationException) { }
+        if (detail.Length > 300) detail = detail[..300] + "…";
+        throw new RuntimeException("media_request", detail.Length > 0 ? "The media engine said: " + detail : $"The media engine failed (HTTP {(int)response.StatusCode}).");
+    }
+
+    private static CancellationTokenSource Timeout(CancellationToken token, TimeSpan limit)
+    {
+        var source = CancellationTokenSource.CreateLinkedTokenSource(token);
+        source.CancelAfter(limit);
+        return source;
+    }
+
+    private static void RequireKnown(string model)
+    {
+        if (MediaAddons.Find(model) is null) throw new ArgumentException("Unknown add-on.", nameof(model));
+    }
+
+    private void SetInstalled(string model, bool installed)
+    {
+        lock (_sync)
+        {
+            var set = Installed.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (installed) set.Add(model); else set.Remove(model);
+            Directory.CreateDirectory(_root);
+            var temporary = _installedPath + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(set.Order(StringComparer.OrdinalIgnoreCase).ToArray()));
+            File.Move(temporary, _installedPath, overwrite: true);
+        }
+        InstalledChanged?.Invoke(this, EventArgs.Empty);
+    }
 }

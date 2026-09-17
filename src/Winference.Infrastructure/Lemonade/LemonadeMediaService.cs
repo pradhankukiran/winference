@@ -219,4 +219,84 @@ public sealed class LemonadeMediaService : IAsyncDisposable
             if (Interlocked.Decrement(ref _busy) == 0) ScheduleIdleStop();
         }
     }
+
+    private void ScheduleIdleStop()
+    {
+        var idle = new CancellationTokenSource();
+        Interlocked.Exchange(ref _idle, idle)?.Cancel();
+        _ = Task.Delay(IdleStop, idle.Token).ContinueWith(async task =>
+        {
+            if (task.IsCanceled || Volatile.Read(ref _busy) > 0) return;
+            await _startGate.WaitAsync().ConfigureAwait(false);
+            try { if (Volatile.Read(ref _busy) == 0 && !idle.IsCancellationRequested) await StopCoreAsync().ConfigureAwait(false); }
+            finally { _startGate.Release(); }
+        }, TaskScheduler.Default);
+    }
+
+    private async Task<HttpClient> EnsureStartedAsync(CancellationToken token)
+    {
+        await _startGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            if (_owned is { HasExited: false } && _http is not null) return _http;
+            await StopCoreAsync().ConfigureAwait(false);
+            if (!File.Exists(_lemonadePath) || await PinnedRuntimeAcquisition.HashAsync(_lemonadePath, token).ConfigureAwait(false) != PinnedRuntimeAcquisition.LemonadeExeSha256)
+                throw new RuntimeException("media_runtime", "The bundled Lemonade server is missing or changed. Reinstall Winference.");
+
+            var cache = Path.Combine(_root, "cache");
+            var config = Path.Combine(_root, "config");
+            var models = Path.Combine(_root, "models");
+            Directory.CreateDirectory(cache); Directory.CreateDirectory(config); Directory.CreateDirectory(models);
+            await File.WriteAllTextAsync(Path.Combine(config, "config.json"), JsonSerializer.Serialize(new
+            {
+                config_version = 2, host = "127.0.0.1", broadcast = false, offline = false, no_fetch_executables = false,
+                auto_check_model_updates = false, auto_update_models = false, inhibit_suspend = false,
+                max_loaded_models = 2, models_dir = models, log_file = "disabled", log_level = "warning",
+                telemetry = new { enabled = false }
+            }, Options), token).ConfigureAwait(false);
+
+            var port = LoopbackListener.FindCandidatePort();
+            var apiKey = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+            var environment = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
+                .Where(entry => entry.Key is string key && !key.StartsWith("LEMONADE_", StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(entry => (string)entry.Key, entry => (string?)entry.Value ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+            environment["LEMONADE_API_KEY"] = apiKey;
+            var owned = OwnedProcessSession.Start(_lemonadePath,
+                [cache, config, "--port", port.ToString(), "--host", "127.0.0.1", "--no-broadcast", "--log-file", "disabled"],
+                Path.GetDirectoryName(_lemonadePath)!, environment);
+            var http = new HttpClient(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false })
+            { BaseAddress = new Uri($"http://127.0.0.1:{port}/api/v1/"), Timeout = System.Threading.Timeout.InfiniteTimeSpan };
+            http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            _owned = owned;
+            _http = http;
+
+            using var deadline = Timeout(token, TimeSpan.FromSeconds(30));
+            while (true)
+            {
+                if (owned.HasExited) throw new RuntimeException("media_start", "The media engine could not start.");
+                if (LoopbackListener.IsOwned(port, owned.ProcessId))
+                {
+                    try
+                    {
+                        using var response = await http.GetAsync("health", deadline.Token).ConfigureAwait(false);
+                        if (response.IsSuccessStatusCode)
+                        {
+                            using var health = JsonDocument.Parse(await response.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false));
+                            if (health.RootElement.GetProperty("version").GetString() != Version)
+                                throw new RuntimeException("media_runtime", "The media engine version differs from the tested build.");
+                            return http;
+                        }
+                    }
+                    catch (HttpRequestException) { }
+                }
+                await Task.Delay(100, deadline.Token).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            await StopCoreAsync().ConfigureAwait(false);
+            throw;
+        }
+        finally { _startGate.Release(); }
+    }
 }

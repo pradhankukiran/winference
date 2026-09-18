@@ -79,5 +79,56 @@ public sealed class LocalModelTokenizer : IDisposable
                 RegexOptions.CultureInvariant,
                 TimeSpan.FromSeconds(2));
         }
+
+        // Detect chat template formatting
+        _templateStyle = DetectTemplateStyle(tokenizerConfigPath);
+
+        // Instantiate BPE tokenizer
+        _tokenizer = BpeTokenizer.Create(new BpeOptions(vocabulary)
+        {
+            Merges = merges,
+            ByteLevel = true,
+            PreTokenizer = new ScalarRegexPreTokenizer(splitRegex)
+        });
+    }
+
+    public int CountPromptTokens(IReadOnlyList<ChatMessage> messages)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(messages);
+        if (messages.Count is < 1 or > 64)
+            throw new RuntimeException("context_limit", "This chat is too long. Start a new chat before sending another message.");
+
+        var text = RenderPrompt(messages);
+        if (_addedTokenPattern is null)
+            return _tokenizer.CountTokens(text);
+
+        var count = 0;
+        var position = 0;
+        while (position < text.Length)
+        {
+            var match = _addedTokenPattern.Match(text, position);
+            if (!match.Success)
+            {
+                if (position < text.Length)
+                    count = checked(count + _tokenizer.CountTokens(text[position..]));
+                break;
+            }
+
+            var rule = _addedTokens[match.Value];
+            var ordinaryEnd = match.Index;
+            if (rule.LeftStrip)
+                while (ordinaryEnd > position && char.IsWhiteSpace(text[ordinaryEnd - 1])) --ordinaryEnd;
+
+            if (ordinaryEnd > position)
+                count = checked(count + _tokenizer.CountTokens(text[position..ordinaryEnd]));
+
+            count = checked(count + 1);
+            position = match.Index + match.Length;
+            if (rule.RightStrip)
+                while (position < text.Length && char.IsWhiteSpace(text[position])) ++position;
+        }
+
+        return count;
     }
 }

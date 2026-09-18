@@ -196,4 +196,79 @@ public sealed class LocalModelTokenizer : IDisposable
         rendered.Append("<|start_header_id|>assistant<|end_header_id|>\n\n");
         return rendered.ToString();
     }
+
+    private static string RenderChatML(IReadOnlyList<ChatMessage> messages)
+    {
+        var rendered = new StringBuilder();
+        foreach (var message in messages)
+        {
+            rendered.Append("<|im_start|>").Append(message.Role).Append('\n')
+                    .Append(message.Content).Append("<|im_end|>\n");
+            if (rendered.Length > 262144)
+                throw new RuntimeException("context_limit", "This message is too large. Shorten it or start a new chat.");
+        }
+        rendered.Append("<|im_start|>assistant\n");
+        return rendered.ToString();
+    }
+
+    private TemplateStyle DetectTemplateStyle(string? tokenizerConfigPath)
+    {
+        var templateStr = string.Empty;
+        if (!string.IsNullOrWhiteSpace(tokenizerConfigPath) && File.Exists(tokenizerConfigPath))
+        {
+            try
+            {
+                using var configDoc = JsonDocument.Parse(File.ReadAllText(tokenizerConfigPath));
+                if (configDoc.RootElement.TryGetProperty("chat_template", out var ct) && ct.ValueKind == JsonValueKind.String)
+                    templateStr = ct.GetString() ?? string.Empty;
+            }
+            catch (JsonException) { }
+        }
+
+        if (templateStr.Contains("<|start_header_id|>") || _addedTokens.ContainsKey("<|start_header_id|>"))
+            return TemplateStyle.Llama3;
+        if (templateStr.Contains("<|im_start|>") || _addedTokens.ContainsKey("<|im_start|>"))
+            return TemplateStyle.ChatML;
+        if (templateStr.Contains("<|user|>") || templateStr.Contains("<|system|>") || _addedTokens.ContainsKey("<|user|>"))
+            return TemplateStyle.Phi;
+
+        return TemplateStyle.ChatML;
+    }
+
+    private static string ExtractSplitPattern(JsonElement root)
+    {
+        if (root.TryGetProperty("pre_tokenizer", out var preTok))
+        {
+            if (preTok.TryGetProperty("pretokenizers", out var stages) && stages.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var stage in stages.EnumerateArray())
+                {
+                    if (stage.TryGetProperty("type", out var stageType) && stageType.GetString() == "Split" &&
+                        stage.TryGetProperty("pattern", out var pat) && pat.TryGetProperty("Regex", out var regexElem) &&
+                        regexElem.GetString() is { Length: > 0 } pattern)
+                    {
+                        return pattern;
+                    }
+                }
+            }
+            else if (preTok.TryGetProperty("pattern", out var pat) && pat.TryGetProperty("Regex", out var regexElem) &&
+                     regexElem.GetString() is { Length: > 0 } pattern)
+            {
+                return pattern;
+            }
+        }
+
+        // Universal standard BPE pre-tokenizer split regex (Llama 3 / Qwen 2.5 / GPT-4)
+        return @"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
+    }
+
+    private static void EnsureValidUnicode(string text)
+    {
+        for (var i = 0; i < text.Length; ++i)
+        {
+            if (!char.IsSurrogate(text[i])) continue;
+            if (!char.IsHighSurrogate(text[i]) || i + 1 >= text.Length || !char.IsLowSurrogate(text[++i]))
+                throw new RuntimeException("invalid_message", "The message contains invalid Unicode text.");
+        }
+    }
 }

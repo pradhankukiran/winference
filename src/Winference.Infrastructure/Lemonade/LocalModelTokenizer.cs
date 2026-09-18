@@ -131,4 +131,69 @@ public sealed class LocalModelTokenizer : IDisposable
 
         return count;
     }
+
+    public void Validate(IReadOnlyList<ChatMessage> messages, int maxOutputTokens, int contextLength)
+    {
+        if (maxOutputTokens <= 0 || contextLength <= 1) throw new ArgumentOutOfRangeException(nameof(maxOutputTokens));
+        var promptTokens = CountPromptTokens(messages);
+        // Reserve an extra token for FastFlowLM prefill boundary
+        if ((long)promptTokens + maxOutputTokens + 1 > contextLength)
+            throw new RuntimeException("context_limit", $"This conversation exceeds the {contextLength:N0}-token context. Shorten your message or start a new chat.");
+    }
+
+    public void Dispose() => _disposed = true;
+
+    private string RenderPrompt(IReadOnlyList<ChatMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            if (message is null || message.Role is not ("system" or "user" or "assistant") || message.Content is null)
+                throw new RuntimeException("invalid_message", "The conversation contains an unsupported message.");
+            EnsureValidUnicode(message.Content);
+        }
+
+        return _templateStyle switch
+        {
+            TemplateStyle.Llama3 => RenderLlama3(messages),
+            TemplateStyle.ChatML => RenderChatML(messages),
+            _ => RenderPhi(messages)
+        };
+    }
+
+    private static string RenderPhi(IReadOnlyList<ChatMessage> messages)
+    {
+        var rendered = new StringBuilder();
+        string? previousRole = null;
+        foreach (var message in messages)
+        {
+            if (message.Role == previousRole && message.Role is "user" or "system")
+            {
+                rendered.Length -= "<|end|>".Length;
+                rendered.Append(message.Content).Append("<|end|>");
+            }
+            else
+            {
+                rendered.Append("<|").Append(message.Role).Append("|>").Append(message.Content).Append("<|end|>");
+            }
+            previousRole = message.Role;
+            if (rendered.Length > 262144)
+                throw new RuntimeException("context_limit", "This message is too large. Shorten it or start a new chat.");
+        }
+        rendered.Append("<|assistant|>");
+        return rendered.ToString();
+    }
+
+    private static string RenderLlama3(IReadOnlyList<ChatMessage> messages)
+    {
+        var rendered = new StringBuilder("<|begin_of_text|>");
+        foreach (var message in messages)
+        {
+            rendered.Append("<|start_header_id|>").Append(message.Role).Append("<|end_header_id|>\n\n")
+                    .Append(message.Content.Trim()).Append("<|eot_id|>");
+            if (rendered.Length > 262144)
+                throw new RuntimeException("context_limit", "This message is too large. Shorten it or start a new chat.");
+        }
+        rendered.Append("<|start_header_id|>assistant<|end_header_id|>\n\n");
+        return rendered.ToString();
+    }
 }

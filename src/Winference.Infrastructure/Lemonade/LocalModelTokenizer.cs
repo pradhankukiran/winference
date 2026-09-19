@@ -271,4 +271,44 @@ public sealed class LocalModelTokenizer : IDisposable
                 throw new RuntimeException("invalid_message", "The message contains invalid Unicode text.");
         }
     }
+
+    private sealed record AddedTokenRule(bool LeftStrip, bool RightStrip);
+
+    /// <summary>
+    /// HF's regex operates on Unicode scalar values. .NET Regex uses UTF-16.
+    /// Collapse supplementary runes to category-equivalent BMP placeholders for
+    /// matching, then return offsets into the unchanged original input.
+    /// </summary>
+    private sealed class ScalarRegexPreTokenizer(string pattern) : PreTokenizer
+    {
+        private readonly Regex _pattern = new(pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
+
+        public override IEnumerable<(int Offset, int Length)> PreTokenize(ReadOnlySpan<char> text) => PreTokenize(text.ToString());
+
+        public override IEnumerable<(int Offset, int Length)> PreTokenize(string text)
+        {
+            var proxy = new StringBuilder(text.Length);
+            var offsets = new List<int>(text.Length + 1);
+            var offset = 0;
+            foreach (var rune in text.EnumerateRunes())
+            {
+                offsets.Add(offset);
+                proxy.Append(rune.IsBmp ? (char)rune.Value : Proxy(Rune.GetUnicodeCategory(rune)));
+                offset += rune.Utf16SequenceLength;
+            }
+            offsets.Add(offset);
+            foreach (Match match in _pattern.Matches(proxy.ToString()))
+                yield return (offsets[match.Index], offsets[match.Index + match.Length] - offsets[match.Index]);
+        }
+
+        private static char Proxy(UnicodeCategory category) => category switch
+        {
+            UnicodeCategory.UppercaseLetter => 'Ā', UnicodeCategory.LowercaseLetter => 'ā',
+            UnicodeCategory.TitlecaseLetter => 'ǅ', UnicodeCategory.ModifierLetter => 'ʰ',
+            UnicodeCategory.OtherLetter => '中', UnicodeCategory.NonSpacingMark => '\u0301',
+            UnicodeCategory.SpacingCombiningMark => '\u093e', UnicodeCategory.EnclosingMark => '\u20dd',
+            UnicodeCategory.DecimalDigitNumber => '\u0661', UnicodeCategory.LetterNumber => '\u216b',
+            UnicodeCategory.OtherNumber => '\u00b2', _ => '\ue000'
+        };
+    }
 }

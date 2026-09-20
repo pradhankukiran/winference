@@ -199,4 +199,62 @@ public sealed class OdsGpuBackend(
             yield return item;
         }
     }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _stopGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            _session = null;
+            _http?.Dispose();
+            _http = null;
+            if (_owned is { } owned)
+            {
+                LastDiagnostics = owned.Diagnostics;
+                await owned.StopAsync(cancellationToken).ConfigureAwait(false);
+                owned.Dispose();
+                _owned = null;
+            }
+            _modelLease?.Dispose();
+            _modelLease = null;
+            _runtimeProcessId = 0;
+        }
+        finally { _stopGate.Release(); }
+    }
+
+    private string BridgePath => Path.GetFullPath(Path.Combine(helperDirectory, "Invoke-GpuRuntime.ps1"));
+    private static string PowerShellPath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),
+        "WindowsPowerShell", "v1.0", "powershell.exe");
+
+    private void AssertCurrentListener()
+    {
+        if (_owned is null || _owned.HasExited || !_owned.GetProcessIds().Contains(_runtimeProcessId) ||
+            !SamePath(_owned.GetImagePath(_runtimeProcessId), runtime.ExecutablePath) ||
+            !LoopbackListener.IsOwned(_port, _runtimeProcessId))
+            throw new RuntimeException("gpu_ownership", "The selected GPU runtime no longer owns this connection. Reload the model.");
+    }
+
+    private void ProveOwnedRecord(OdsReadyRecord record, Guid sessionId, ModelProfile profile)
+    {
+        if (_owned is null || _owned.HasExited || record.SchemaVersion != 1 ||
+            record.SessionId != sessionId.ToString("N") || record.SupervisorId != _owned.ProcessId ||
+            record.Port != _port || record.ModelId != profile.ProviderModelId ||
+            !SamePath(record.ModelPath, registration.ModelPath) || record.ModelSha256 != registration.Sha256 ||
+            record.ModelLengthBytes != registration.LengthBytes || !SamePath(record.ExecutablePath, runtime.ExecutablePath) ||
+            record.ReleaseTag != runtime.ReleaseTag || record.Build != 9014 ||
+            record.ContextSize != profile.ContextLength || record.RuntimeContext < profile.ContextLength ||
+            record.RuntimeContext - profile.ContextLength >= 256 ||
+            record.OffloadedLayers <= 0 || record.OffloadedLayers != record.TotalLayers ||
+            !System.Text.RegularExpressions.Regex.IsMatch(record.Device ?? string.Empty, "^Vulkan[0-9]{1,2}$") ||
+            !record.AdapterPnpId.StartsWith("PCI\\VEN_1002&", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(record.DeviceDescription) || string.IsNullOrWhiteSpace(record.DriverVersion) ||
+            !_owned.GetProcessIds().Contains(record.ProcessId) ||
+            !SamePath(_owned.GetImagePath(record.ProcessId), runtime.ExecutablePath) ||
+            !LoopbackListener.IsOwned(_port, record.ProcessId))
+            throw new RuntimeException("gpu_readiness", "The selected GPU, model, owned process or layer placement could not be verified.");
+        using var process = Process.GetProcessById(record.ProcessId);
+        if (!DateTimeOffset.TryParse(record.StartedUtc, out var started) ||
+            Math.Abs((process.StartTime.ToUniversalTime() - started.UtcDateTime).TotalMilliseconds) >= 1)
+            throw new RuntimeException("gpu_ownership", "The GPU process identity changed during startup. Retry loading the model.");
+    }
 }

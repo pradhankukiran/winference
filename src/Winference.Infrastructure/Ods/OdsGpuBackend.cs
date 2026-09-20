@@ -257,4 +257,86 @@ public sealed class OdsGpuBackend(
             Math.Abs((process.StartTime.ToUniversalTime() - started.UtcDateTime).TotalMilliseconds) >= 1)
             throw new RuntimeException("gpu_ownership", "The GPU process identity changed during startup. Retry loading the model.");
     }
+
+    private async Task ProveHttpAsync(OdsReadyRecord record, ModelProfile profile, CancellationToken token)
+    {
+        using (await GetJsonAsync("health", token).ConfigureAwait(false)) { }
+        using var catalog = await GetJsonAsync("v1/models", token).ConfigureAwait(false);
+        var models = catalog.RootElement.GetProperty("data");
+        if (models.ValueKind != JsonValueKind.Array || models.GetArrayLength() != 1 ||
+            models[0].GetProperty("id").GetString() != profile.ProviderModelId)
+            throw new RuntimeException("gpu_model_identity", "The GPU runtime serves a different model from your selection.");
+        using var properties = await GetJsonAsync("props", token).ConfigureAwait(false);
+        var settings = properties.RootElement;
+        var modelPath = settings.GetProperty("model_path").GetString();
+        var context = settings.GetProperty("default_generation_settings").GetProperty("n_ctx").GetInt32();
+        if ((!SamePath(modelPath, registration.ModelPath) && !SamePath(modelPath, record.ModelArgumentPath)) ||
+            settings.GetProperty("total_slots").GetInt32() != 1 || context != record.RuntimeContext ||
+            context < profile.ContextLength || context - profile.ContextLength >= 256)
+            throw new RuntimeException("gpu_model_identity", "The GPU model path, slot count or context differs from your selection.");
+    }
+
+    public async Task<PromptTokenCount> CountPromptTokensAsync(RuntimeSession session,
+        IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken)
+    {
+        if (_session is null || session.SessionId != _session.SessionId || session.Profile != registration.Profile || _http is null)
+            throw new RuntimeException("gpu_session", "The selected GPU session changed. Reload the model before sending.");
+        AssertCurrentListener();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(15));
+        var token = deadline.Token;
+        using var rendered = await PostJsonAsync("apply-template", new
+        {
+            messages = messages.Select(item => new { role = item.Role, content = item.Content })
+        }, token).ConfigureAwait(false);
+        var prompt = rendered.RootElement.GetProperty("prompt").GetString()
+            ?? throw new RuntimeException("gpu_context", "The GPU runtime could not render this model's chat template.");
+        using var tokenized = await PostJsonAsync("tokenize", new
+        {
+            content = prompt, add_special = false, parse_special = true
+        }, token).ConfigureAwait(false);
+        var tokens = tokenized.RootElement.GetProperty("tokens");
+        if (tokens.ValueKind != JsonValueKind.Array || tokens.GetArrayLength() == 0)
+            throw new RuntimeException("gpu_context", "The GPU runtime did not return a valid token count.");
+        AssertCurrentListener();
+        return new(tokens.GetArrayLength(), true);
+    }
+
+    private async Task ValidateContextAsync(GenerationRequest request, CancellationToken token)
+    {
+        var count = await CountPromptTokensAsync(_session!, request.Messages, token).ConfigureAwait(false);
+        if ((long)count.Tokens + request.MaxOutputTokens > registration.Profile.ContextLength)
+            throw new RuntimeException("gpu_context", "This conversation and reply reserve exceed the selected context. Shorten the message or start a new chat.");
+    }
+
+    private async Task<JsonDocument> GetJsonAsync(string path, CancellationToken token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        return await SendJsonAsync(request, token).ConfigureAwait(false);
+    }
+
+    private async Task<JsonDocument> PostJsonAsync(string path, object body, CancellationToken token)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(body) };
+        return await SendJsonAsync(request, token).ConfigureAwait(false);
+    }
+
+    private async Task<JsonDocument> SendJsonAsync(HttpRequestMessage request, CancellationToken token)
+    {
+        if (_http is null) throw new RuntimeException("gpu_session", "The GPU connection is unavailable. Reload the model.");
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw new RuntimeException("gpu_protocol", "The pinned GPU runtime rejected a required model or context check. Reload the model.");
+        using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        using var memory = new MemoryStream();
+        var buffer = new byte[8192];
+        int count;
+        while ((count = await stream.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
+        {
+            if (memory.Length + count > 4 * 1024 * 1024)
+                throw new RuntimeException("gpu_protocol", "The GPU runtime returned oversized metadata.");
+            await memory.WriteAsync(buffer.AsMemory(0, count), token).ConfigureAwait(false);
+        }
+        return JsonDocument.Parse(memory.ToArray(), new JsonDocumentOptions { MaxDepth = 48 });
+    }
 }

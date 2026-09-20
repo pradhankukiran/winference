@@ -154,4 +154,49 @@ public sealed class OdsGpuBackend(
             throw;
         }
     }
+
+    public async IAsyncEnumerable<GenerationEvent> GenerateAsync(RuntimeSession session, GenerationRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        if (_session is null || session.SessionId != _session.SessionId || session.Profile != registration.Profile ||
+            request.ProfileId != registration.Profile.ProfileId || _http is null)
+            throw new RuntimeException("gpu_session", "The selected GPU session changed. Reload the model before sending.");
+        AssertCurrentListener();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromMinutes(5));
+        var token = deadline.Token;
+        // Model-specific rendering/counting is performed by the selected runtime.
+        // HTTP request limits remain transport bounds, never invented token counts.
+        await ValidateContextAsync(request, token).ConfigureAwait(false);
+        using var message = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
+        {
+            Content = JsonContent.Create(new
+            {
+                model = registration.Profile.ProviderModelId,
+                messages = request.Messages.Select(item => new { role = item.Role, content = item.Content }),
+                max_tokens = request.MaxOutputTokens,
+                temperature = request.Temperature,
+                stream = true,
+                stream_options = new { include_usage = true }
+            })
+        };
+        using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw new RuntimeException("gpu_completion", response.StatusCode == System.Net.HttpStatusCode.BadRequest
+                ? "The GPU runtime rejected this request or its context limit. Shorten the message or start a new chat."
+                : "The local GPU runtime could not produce a reply. Retry loading the model.");
+        if (response.Content.Headers.ContentType?.MediaType != "text/event-stream")
+            throw new RuntimeException("gpu_stream", "The GPU runtime did not return a supported streamed reply.");
+        using var stream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+        await foreach (var item in CompletionStreamReader.ReadAsync(stream, token).ConfigureAwait(false))
+        {
+            if (item.Kind == GenerationEventKind.Completed)
+            {
+                if (item.FinishReason is not ("stop" or "length"))
+                    throw new RuntimeException("gpu_stream", "The GPU reply ended without a supported completion reason.");
+                AssertCurrentListener();
+            }
+            yield return item;
+        }
+    }
 }

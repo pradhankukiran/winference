@@ -339,4 +339,46 @@ public sealed class OdsGpuBackend(
         }
         return JsonDocument.Parse(memory.ToArray(), new JsonDocumentOptions { MaxDepth = 48 });
     }
+
+    private static async Task<OdsReadyRecord> ReadReadyAsync(string path, CancellationToken token)
+    {
+        if (new FileInfo(path).Length is <= 0 or > 65536)
+            throw new RuntimeException("gpu_readiness", "The GPU readiness record was invalid.");
+        return JsonSerializer.Deserialize<OdsReadyRecord>(await File.ReadAllTextAsync(path, token).ConfigureAwait(false), JsonOptions)
+            ?? throw new RuntimeException("gpu_readiness", "The GPU readiness record was empty.");
+    }
+
+    private static async Task<RuntimeException> ReadFailureAsync(string path, CancellationToken token)
+    {
+        if (new FileInfo(path).Length is <= 0 or > 65536)
+            return new("gpu_startup", "The GPU helper could not start the selected model.");
+        using var document = JsonDocument.Parse(await File.ReadAllTextAsync(path, token).ConfigureAwait(false));
+        var message = document.RootElement.TryGetProperty("message", out var value) ? value.GetString() : null;
+        return new("gpu_startup", string.IsNullOrWhiteSpace(message) || message.Length > 2048
+            ? "The GPU helper could not start the selected model. Check the GPU driver and available memory."
+            : message);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void WritePrivateRequest(string path, byte[] content)
+    {
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(true, false);
+        security.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.FullControl, AccessControlType.Allow));
+        using var stream = FileSystemAclExtensions.Create(new FileInfo(path), FileMode.CreateNew,
+            FileSystemRights.FullControl, FileShare.None, 8192, FileOptions.None, security);
+        stream.Write(content);
+        stream.Flush(true);
+    }
+
+    private static Dictionary<string, string> CleanEnvironment() => Environment.GetEnvironmentVariables()
+        .Cast<System.Collections.DictionaryEntry>()
+        .Where(item => item.Key is string key &&
+            !key.StartsWith("LLAMA_ARG_", StringComparison.OrdinalIgnoreCase) &&
+            !key.StartsWith("LLAMA_LOG_", StringComparison.OrdinalIgnoreCase) &&
+            !key.StartsWith("GGML_", StringComparison.OrdinalIgnoreCase))
+        .ToDictionary(item => (string)item.Key, item => (string)item.Value!, StringComparer.OrdinalIgnoreCase);
+
+    private static bool SamePath(string? left, string? right) => !string.IsNullOrWhiteSpace(left) &&
+        !string.IsNullOrWhiteSpace(right) && string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase);
 }

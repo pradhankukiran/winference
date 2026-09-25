@@ -1,0 +1,27 @@
+{
+  "Repository": "https://github.com/Osmantic/ODS",
+  "Revision": "72e59cdc665fc576d300061cabb5b980cbbaf1da",
+  "Files": [
+    {
+      "Source": "ods/installers/windows/lib/native-llama-runtime.ps1",
+      "Destination": "external/ods/windows/native-llama-runtime.ps1",
+      "Sha256": "098f754bf1cb000e99290d0b3271050ac974d364623705cbd8f60b2228194d8f",
+      "Treatment": "unchanged source extraction"
+    },
+    {
+      "Source": "ods/installers/windows/lib/private-file.ps1",
+      "Destination": "external/ods/windows/private-file.ps1",
+      "Sha256": "8f3bbd80e0f209a9af2eb564e81b209440a0e93fc942974fabd4f8f702790dc1",
+      "Treatment": "unchanged source extraction"
+    },
+    {
+      "Source": "ods/extensions/services/dashboard-api/gguf_inspector.py",
+      "Destination": "src/Winference.Infrastructure/Gpu/GgufMetadataReader.cs",
+      "Sha256": "b9e8bccb32c6d8f40215b53148fcc3d0ab731202cd319e87cb2c09d032d8014c",
+      "Treatment": "attributed native C# port of bounded header inspection; Python source is not shipped or executed"
+    }
+  ],
+  "License": "Apache-2.0",
+  "ExecutionStatus": "Not executed or tested; deferred at user request.",
+  "LicenseSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+}

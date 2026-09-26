@@ -1,0 +1,5 @@
+# Dependency notices
+
+Microsoft.ML.Tokenizers 2.0.1: LICENSE and THIRD-PARTY-NOTICES.TXT copied unmodified from the exact restored NuGet package. Google.Protobuf 3.30.2 is its locked transitive dependency; LICENSE is from https://github.com/protocolbuffers/protobuf/blob/v30.2/LICENSE. These notices accompany the native development publish folder. Existing .NET/Windows App SDK self-contained notices remain in that folder. Lemonade has its own unmodified license under Runtimes/Lemonade. FastFlowLM and model weights are existing external installations, not bundled by this phase. Full installer distribution qualification remains Phase 08.
+
+Phase 04 adds the unmodified MIT notices for ryzenai-server v1.7.0 and ONNX Runtime GenAI v0.11.2. The AMD runtime is a separately reviewed component download; its complete original payload includes AMD_LICENSE. Those native-library terms are separate from the server and C API source licenses. Model exports remain external downloads with their original license files. These notices do not establish installer or redistribution qualification.

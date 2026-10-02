@@ -150,4 +150,39 @@ public static class MessageFormatting
         text = trimmed[(length + 1)..];
         return true;
     }
+
+    private static bool TryQuote(string line, out string text)
+    {
+        var trimmed = line.TrimStart();
+        text = string.Empty;
+        if (!trimmed.StartsWith('>')) return false;
+        text = trimmed[1..];
+        if (text.StartsWith(' ')) text = text[1..];
+        return true;
+    }
+
+    private static bool TryTableHeader(string[] lines, int index, out IReadOnlyList<string> header)
+    {
+        header = [];
+        if (index + 1 >= lines.Length || !TryTableRow(lines[index], out var cells) || cells.Count is < 2 or > 12 ||
+            !TryTableRow(lines[index + 1], out var separators) || cells.Count != separators.Count) return false;
+        foreach (var separator in separators)
+        {
+            var rule = separator.Trim(':');
+            if (rule.Length < 3 || rule.Any(character => character != '-')) return false;
+        }
+        header = cells;
+        return true;
+    }
+
+    private static bool TryTableRow(string line, out IReadOnlyList<string> cells)
+    {
+        cells = [];
+        if (!line.Contains('|') || line.Contains("\\|", StringComparison.Ordinal) || line.Contains('`')) return false;
+        var row = line.Trim();
+        if (row.StartsWith('|')) row = row[1..];
+        if (row.EndsWith('|')) row = row[..^1];
+        cells = row.Split('|').Select(cell => cell.Trim()).ToArray();
+        return true;
+    }
 }

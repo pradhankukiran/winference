@@ -70,4 +70,84 @@ public static class MessageFormatting
         }
         return blocks;
     }
+
+    public static IReadOnlyList<MessageInline> ParseInline(string text)
+    {
+        var result = new List<MessageInline>();
+        var literal = new StringBuilder();
+        for (var i = 0; i < text.Length;)
+        {
+            var marker = text[i] == '`' && (i + 1 == text.Length || text[i + 1] != '`') ? "`"
+                : i + 1 < text.Length && (text.AsSpan(i).StartsWith("**") || text.AsSpan(i).StartsWith("__")) ? text.Substring(i, 2) : null;
+            var end = marker is null ? -1 : text.IndexOf(marker, i + marker.Length, StringComparison.Ordinal);
+            if (marker is not null && end > i + marker.Length &&
+                (marker != "`" || end + 1 == text.Length || text[end + 1] != '`'))
+            {
+                if (literal.Length > 0) { result.Add(new(MessageInlineKind.Text, literal.ToString())); literal.Clear(); }
+                result.Add(new(marker == "`" ? MessageInlineKind.Code : MessageInlineKind.Strong,
+                    text.Substring(i + marker.Length, end - i - marker.Length)));
+                i = end + marker.Length;
+            }
+            else { literal.Append(text[i]); i++; }
+        }
+        if (literal.Length > 0) result.Add(new(MessageInlineKind.Text, literal.ToString()));
+        return result;
+    }
+
+    private static string Source(string[] lines, int start, int end) => string.Join("\n", lines[start..end]);
+    private static bool StartsBlock(string[] lines, int index) =>
+        TryFence(lines[index], out _, out _, out _) || TryHeading(lines[index], out _, out _) ||
+        TryListItem(lines[index], out _, out _, out _) || TryQuote(lines[index], out _) || TryTableHeader(lines, index, out _);
+
+    private static bool TryFence(string line, out char marker, out int length, out string language)
+    {
+        var trimmed = line.TrimStart();
+        marker = trimmed.Length == 0 ? '\0' : trimmed[0];
+        length = 0;
+        language = string.Empty;
+        if (marker is not ('`' or '~')) return false;
+        while (length < trimmed.Length && trimmed[length] == marker) length++;
+        if (length < 3) return false;
+        language = trimmed[length..].Trim();
+        return marker != '`' || !language.Contains('`');
+    }
+
+    private static bool IsClosingFence(string line, char marker, int length)
+    {
+        var trimmed = line.Trim();
+        var count = 0;
+        while (count < trimmed.Length && trimmed[count] == marker) count++;
+        return count >= length && count == trimmed.Length;
+    }
+
+    private static bool TryHeading(string line, out string text, out int level)
+    {
+        var trimmed = line.TrimStart();
+        level = 0;
+        while (level < trimmed.Length && trimmed[level] == '#') level++;
+        text = string.Empty;
+        if (level is < 1 or > 6 || level < trimmed.Length && !char.IsWhiteSpace(trimmed[level])) return false;
+        text = trimmed[level..].TrimStart();
+        return true;
+    }
+
+    private static bool TryListItem(string line, out string text, out string marker, out int indent)
+    {
+        var trimmed = line.TrimStart();
+        indent = Math.Min(6, (line.Length - trimmed.Length) / 2);
+        text = marker = string.Empty;
+        if (trimmed.Length < 2) return false;
+        var length = 0;
+        if (trimmed[0] is '-' or '*' or '+') length = 1;
+        else
+        {
+            while (length < trimmed.Length && char.IsAsciiDigit(trimmed[length])) length++;
+            if (length is < 1 or > 9 || length >= trimmed.Length || trimmed[length] is not ('.' or ')')) return false;
+            length++;
+        }
+        if (length >= trimmed.Length || !char.IsWhiteSpace(trimmed[length])) return false;
+        marker = trimmed[0] is '-' or '*' or '+' ? "•" : trimmed[..length];
+        text = trimmed[(length + 1)..];
+        return true;
+    }
 }

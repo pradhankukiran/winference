@@ -48,4 +48,98 @@ internal sealed class ModelSessionService(
     private readonly ModeSwitchCoordinator _switches = CreateCoordinator(shell, lifetime);
     private ModelActivationPlan? _currentActivation;
     private Task? _change;
+
+    private DispatcherQueueTimer? _idleWatch;
+
+    public bool IsChanging => _change is { IsCompleted: false };
+
+    /// <summary>How long a loaded model may sit unused. Null keeps it loaded.</summary>
+    public TimeSpan? IdleTimeout { get; set; }
+
+    public void StartIdleWatch()
+    {
+        _idleWatch = dispatcher.CreateTimer();
+        _idleWatch.Interval = TimeSpan.FromSeconds(10);
+        _idleWatch.IsRepeating = true;
+        _idleWatch.Tick += (_, _) =>
+        {
+            if (!lifetime.IsClosing && !IsChanging) shell.Chat?.UnloadIfIdle(IdleTimeout);
+        };
+        _idleWatch.Start();
+    }
+    public Task? PendingChange => _change;
+
+    private static ModeSwitchCoordinator CreateCoordinator(ShellViewModel shell, AppLifetime lifetime)
+    {
+        var switches = new ModeSwitchCoordinator();
+        switches.Changed += (_, state) =>
+        {
+            AppDiagnostics.Write("model.switch", new { operation = state.OperationId,
+                stage = state.Stage.ToString(), requested = state.RequestedProfile?.ExecutionMode.ToString(),
+                active = state.ActiveProfile?.ExecutionMode.ToString(), recovery = state.Recovery.ToString() });
+            if (!lifetime.IsClosing && state.Stage is not (ModeSwitchStage.Ready or ModeSwitchStage.Failed))
+                shell.ReportModelActivity(state.Detail);
+        };
+        return switches;
+    }
+
+    /// <summary>Runs one model change. A second request while one is running is ignored.</summary>
+    public async Task RunAsync(Func<Task> change)
+    {
+        if (lifetime.IsClosing || IsChanging) return;
+        _change = change();
+        await _change;
+    }
+
+    /// <summary>Opens the saved model. False means this is a true first run.</summary>
+    public async Task<bool> OpenSavedAsync(bool loadInBackground)
+    {
+        try { return await TryOpenSavedAsync(loadInBackground); }
+        catch (OperationCanceledException) when (lifetime.IsClosing) { return true; }
+        catch (Exception error)
+        {
+            if (!lifetime.IsClosing) ShowUnavailable(error);
+            return true;
+        }
+    }
+
+    private async Task<bool> TryOpenSavedAsync(bool loadInBackground)
+    {
+        var token = lifetime.Token;
+        var selected = await activeSelection.ReadAsync(token);
+        try
+        {
+            if (selected?.Mode == ExecutionMode.GpuNpu)
+            {
+                var hybrid = await hybridModels.ReadRememberedAsync(token);
+                if (hybrid is not null && (selected.HybridRegistrationId is null || hybrid.Id == selected.HybridRegistrationId))
+                {
+                    ShowHybridChat(hybrid, loadInBackground);
+                    return true;
+                }
+            }
+            else if (selected?.Mode == ExecutionMode.GpuOnly)
+            {
+                var gpu = await gpuModels.ReadRememberedAsync(token);
+                if (gpu is not null && (selected.GpuRegistrationId is null || gpu.Id == selected.GpuRegistrationId))
+                {
+                    ShowGpuChat(gpu, loadInBackground);
+                    return true;
+                }
+            }
+            else
+            {
+                var remembered = await setup.OpenRememberedAsync(token);
+                if (remembered is not null)
+                {
+                    ShowPreparedChat(remembered, loadInBackground);
+                    return true;
+                }
+            }
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            AppDiagnostics.Write("active.model.failed", new { mode = selected?.Mode.ToString(), message = error.Message });
+        }
+    }
 }

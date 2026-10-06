@@ -281,4 +281,73 @@ internal sealed class ModelSessionService(
             shell.ClearModelActivity();
         }
     }
+
+    private ModelActivationPlan CreateGpuActivation(GpuModelRegistration model, bool allowComponentDownload = false) =>
+        activations.CreateGpuPlan(model, allowComponentDownload, ModelProgress(), async token =>
+        {
+            if (lifetime.IsClosing) throw new OperationCanceledException(lifetime.Token);
+            ShowGpuChat(model, loadInBackground: false);
+            await shell.Chat!.LoadForSwitchAsync(token);
+            return shell.Chat.ActiveSession;
+        }, StopMatchingChatAsync);
+
+    private ModelActivationPlan CreateHybridActivation(HybridModelRegistration model, bool allowComponentDownload = false) =>
+        activations.CreateHybridPlan(model, allowComponentDownload, ModelProgress(), async token =>
+        {
+            if (lifetime.IsClosing) throw new OperationCanceledException(lifetime.Token);
+            ShowHybridChat(model, loadInBackground: false);
+            await shell.Chat!.LoadForSwitchAsync(token);
+            return shell.Chat.ActiveSession;
+        }, StopMatchingChatAsync);
+
+    private ModelActivationPlan CreateNpuActivation(SetupModel model, ModelProfile profile,
+        PreparedModel? prepared = null, ISetupService? service = null) =>
+        activations.CreateNpuPlan(model, profile, ModelProgress(), async (checkedModel, owner, token) =>
+        {
+            if (lifetime.IsClosing) throw new OperationCanceledException(lifetime.Token);
+            ShowPreparedChat(checkedModel, loadInBackground: false, saveSelection: true, service: owner);
+            await shell.Chat!.LoadForSwitchAsync(token);
+            return shell.Chat.ActiveSession;
+        }, StopMatchingChatAsync, prepared, service);
+
+    private IProgress<SetupProgress> ModelProgress() => new Progress<SetupProgress>(progress =>
+    {
+        if (!lifetime.IsClosing) shell.ReportModelActivity(progress.Message);
+    });
+
+    private Task StopMatchingChatAsync(ModelProfile profile) => shell.Chat is { } chat && chat.Profile == profile
+        ? chat.ShutdownAsync() : Task.CompletedTask;
+
+    private async Task ReviewHybridAsync(HybridModelRegistration model)
+    {
+        if (!HybridModelService.CanExecute(model))
+        {
+            shell.ReportShellError(HybridModelService.ExecutionStatus(model));
+            return;
+        }
+        try
+        {
+            shell.ReportModelActivity("Checking GPU + NPU setup requirements…");
+            var runtime = await hybridRuntime.InspectAsync(lifetime.Token);
+            if (lifetime.IsClosing) return;
+            shell.ClearModelActivity();
+            // Installed models load straight away; only a download needs the user's consent.
+            if (!runtime.IsInstalled && !await dialogs.ConfirmAsync("Download the GPU + NPU component?",
+                [
+                    model.DisplayName,
+                    $"Required GPU + NPU component: {StorageCheck.Format(runtime.DownloadBytes)} download.",
+                    $"Loading uses a temporary {StorageCheck.Format(model.LengthBytes)} verified copy. Your original folder stays protected.",
+                    "The current model will stop before this one loads. A running reply will stop; its partial text, conversation and draft are kept."
+                ], "Download component and load", primaryIsDefault: true,
+                link: ("AMD runtime terms", new Uri("https://github.com/lemonade-sdk/ryzenai-server/blob/v1.7.0/AMD_LICENSE")))) return;
+            await SwitchActivationAsync(CreateHybridActivation(model, allowComponentDownload: !runtime.IsInstalled),
+                alreadyConfirmed: !runtime.IsInstalled);
+        }
+        catch (OperationCanceledException) when (lifetime.IsClosing) { }
+        catch (Exception error)
+        {
+            if (!lifetime.IsClosing) shell.ReportShellError(UserMessage(error, "GPU + NPU setup could not be prepared. Your saved selection, model files and chats were kept."));
+        }
+        finally { shell.ClearModelActivity(); }
+    }
 }

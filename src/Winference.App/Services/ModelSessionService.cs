@@ -141,5 +141,67 @@ internal sealed class ModelSessionService(
         {
             AppDiagnostics.Write("active.model.failed", new { mode = selected?.Mode.ToString(), message = error.Message });
         }
+
+        // Never load a different model on the user's behalf. Returning users keep their
+        // chats and pick the next model themselves; only a true first run opens setup.
+        if (selected is not null || conversations.Workspace.Conversations.Count > 0)
+            throw new RuntimeException("model_unavailable", "Your last model isn't available. Choose a model to keep chatting. Your chats were kept.");
+        return false;
+    }
+
+    public void ShowUnavailable(Exception error, bool navigate = true)
+    {
+        _currentActivation = null;
+        shell.Chat?.DetachIfUnavailable();
+        // Without trustworthy model metadata, keep chats readable and offer the library.
+        var saved = conversations.Workspace.Conversations.FirstOrDefault(item => item.Id == conversations.Workspace.ActiveConversationId);
+        var modelId = saved?.ModelId ?? "unavailable";
+        var mode = modelId.StartsWith("gguf:", StringComparison.Ordinal) ? ExecutionMode.GpuOnly
+            : modelId.StartsWith("hybrid:", StringComparison.Ordinal) ? ExecutionMode.GpuNpu : ExecutionMode.NpuOnly;
+        var profile = new ModelProfile(modelId, saved?.ProfileId ?? "unavailable", saved?.ArtifactId ?? "unavailable",
+            "unavailable", mode, 2048);
+        shell.SelectModel(new(modelId, ShellViewModel.NoModelName, string.Empty, string.Empty, null, null,
+            "Unavailable", null, "Choose a model to continue.", 4096, 4096, string.Empty), profile);
+        var chat = new ChatViewModel(shell, new RuntimeBroker(new UnavailableBackend()), profile, dispatcher,
+            conversations, modelId, allowLoad: false, features: features);
+        chat.ReportLoadFailure(error is RuntimeException runtime ? runtime.Message : "The saved model information could not be opened. Choose a model to continue.");
+        shell.AttachChat(chat);
+        navigator.ShowChat(navigate);
+    }
+
+    public Task UseGpuAsync(GpuModelRegistration model) => RunAsync(() => ReviewGpuAsync(model));
+    public Task UseHybridAsync(HybridModelRegistration model) => RunAsync(() => ReviewHybridAsync(model));
+    public Task UseNpuAsync(SetupModel model) => RunAsync(() => SwitchNpuAsync(model));
+
+    /// <summary>Stops the loaded model before its files are removed. Chats stay open and readable.</summary>
+    public async Task ReleaseAsync(string modelId)
+    {
+        if (shell.ActiveModelId != modelId) return;
+        if (shell.Chat is { } chat) await chat.ShutdownAsync();
+        await setup.StopAsync(lifetime.Token);
+        await conversations.FlushAsync();
+        ShowUnavailable(new RuntimeException("model_removed",
+            "No model is loaded. Choose a model to keep chatting. Your chats were kept."), navigate: false);
+    }
+
+    private void ShowPreparedChat(PreparedModel prepared, bool loadInBackground, bool saveSelection = false, ISetupService? service = null)
+    {
+        var session = activations.CreateNpuSession(prepared, saveSelection, service);
+        ShowRuntimeChat(session.Model, session.Profile, session.Broker, session.ActivateAsync, loadInBackground);
+        _currentActivation = CreateNpuActivation(prepared.Model, prepared.Profile);
+    }
+
+    private void ShowGpuChat(GpuModelRegistration model, bool loadInBackground, bool allowComponentDownload = false)
+    {
+        var session = activations.CreateGpuSession(model, allowComponentDownload);
+        ShowRuntimeChat(session.Model, session.Profile, session.Broker, session.ActivateAsync, loadInBackground);
+        _currentActivation = CreateGpuActivation(model);
+    }
+
+    private void ShowHybridChat(HybridModelRegistration model, bool loadInBackground, bool allowComponentDownload = false)
+    {
+        var session = activations.CreateHybridSession(model, allowComponentDownload);
+        ShowRuntimeChat(session.Model, session.Profile, session.Broker, session.ActivateAsync, loadInBackground);
+        _currentActivation = CreateHybridActivation(model);
     }
 }

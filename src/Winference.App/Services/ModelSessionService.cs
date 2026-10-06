@@ -204,4 +204,81 @@ internal sealed class ModelSessionService(
         ShowRuntimeChat(session.Model, session.Profile, session.Broker, session.ActivateAsync, loadInBackground);
         _currentActivation = CreateHybridActivation(model);
     }
+
+    private void ShowRuntimeChat(SetupModel model, ModelProfile profile, RuntimeBroker broker,
+        Func<IProgress<SetupProgress>, CancellationToken, Task> activate, bool loadInBackground)
+    {
+        if (lifetime.IsClosing) return;
+        shell.Chat?.DetachIfUnavailable();
+        shell.SelectModel(model, profile);
+        ChatViewModel? chat = null;
+        chat = new ChatViewModel(shell, broker, profile, dispatcher,
+            conversations, model.Id, async token =>
+            {
+                try
+                {
+                    await activate(new Progress<SetupProgress>(value => chat?.ReportLoading(value)), token);
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    await broker.StopAsync(CancellationToken.None);
+                    throw new RuntimeException("model_storage", "Model files or settings could not be accessed. Check their folder and storage access, then Retry. Your chats were kept.", error);
+                }
+                catch
+                {
+                    await broker.StopAsync(CancellationToken.None);
+                    throw;
+                }
+            }, conversationCompatibility: conversationCatalog.For(profile), features: features);
+        shell.AttachChat(chat);
+        navigator.ShowChat(navigate: true);
+        if (loadInBackground) _ = chat.LoadAsync();
+    }
+
+    public async Task<bool> ConfirmBusySwitchAsync()
+    {
+        if (shell.Chat is not { IsShutDown: false, IsBusy: true }) return true;
+        return await dialogs.ConfirmAsync("Stop the current operation and switch?",
+            ["The current reply or model load will stop. Your text and draft are kept."], "Stop and switch");
+    }
+
+    private async Task SwitchActivationAsync(ModelActivationPlan target, bool alreadyConfirmed = false)
+    {
+        if (!alreadyConfirmed && !await ConfirmBusySwitchAsync()) return;
+        var previous = shell.Chat;
+        var previousPlan = _currentActivation;
+        var wasReady = previous?.IsReady == true;
+        previous?.SetSwitching(true, "Checking the selected model…");
+        try
+        {
+            var result = await _switches.SwitchAsync(target, previousPlan, wasReady, lifetime.Token);
+            if (lifetime.IsClosing) return;
+            if (result.Stage == ModeSwitchStage.Ready)
+            {
+                shell.DismissShellError();
+                navigator.FocusComposer();
+                return;
+            }
+            if (result.Recovery == ModeSwitchRecovery.PreviousPreserved)
+                _currentActivation = previousPlan;
+            shell.DismissShellError();
+            if (result.Recovery == ModeSwitchRecovery.Stopped)
+            {
+                await OpenSavedAsync(loadInBackground: false);
+                if (lifetime.IsClosing) return;
+                if (shell.Chat is { } reopened && navigator.IsChatVisible)
+                {
+                    reopened.ReportLoadFailure(result.Detail);
+                    return;
+                }
+            }
+            shell.ReportShellError(result.Detail);
+        }
+        finally
+        {
+            previous?.SetSwitching(false);
+            shell.Chat?.SetSwitching(false);
+            shell.ClearModelActivity();
+        }
+    }
 }

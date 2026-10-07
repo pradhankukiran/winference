@@ -87,4 +87,79 @@ public sealed class ReadAloudService : IDisposable
                 : "Windows couldn't read this aloud. Check that a speech voice is installed in Settings > Time & language > Speech.";
         }
     }
+
+    public void Stop()
+    {
+        ++_request;
+        _synthesizing = false;
+        _cancellation?.Cancel();
+        _cancellation = null;
+        try
+        {
+            _player?.Pause();
+            if (_player is not null) _player.Source = null;
+        }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException or InvalidOperationException) { }
+        _list = null;
+        Finish();
+    }
+
+    private void EnsurePlayer()
+    {
+        if (_player is not null) return;
+        _player = new MediaPlayer { AudioCategory = MediaPlayerAudioCategory.Speech };
+        _player.MediaEnded += (_, _) => _dispatcher.TryEnqueue(() => { if (!_synthesizing) Finish(); });
+        _player.MediaFailed += (_, _) => _dispatcher.TryEnqueue(Stop);
+    }
+
+    private async Task<IRandomAccessStream> KokoroAsync(string model, string chunk, CancellationToken token)
+    {
+        var wav = await _media!.Service.SpeakAsync(model, _media.Voice, chunk, token);
+        var stream = new InMemoryRandomAccessStream();
+        await stream.WriteAsync(wav.AsBuffer());
+        stream.Seek(0);
+        return stream;
+    }
+
+    private async Task<SpeechSynthesisStream> WindowsVoiceAsync(string chunk)
+    {
+        _synthesizer ??= new SpeechSynthesizer();
+        return await _synthesizer.SynthesizeTextToStreamAsync(chunk);
+    }
+
+    /// <summary>Sentence-aligned pieces of about <see cref="ChunkChars"/> characters.</summary>
+    internal static IEnumerable<string> Chunks(string text)
+    {
+        var builder = new System.Text.StringBuilder();
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            var boundary = c is '.' or '!' or '?' or '\n' && (i + 1 == text.Length || char.IsWhiteSpace(text[i + 1]));
+            if (!boundary && i + 1 != text.Length) continue;
+            builder.Append(text, start, i + 1 - start);
+            start = i + 1;
+            if (builder.Length >= ChunkChars || i + 1 == text.Length)
+            {
+                var piece = builder.ToString().Trim();
+                if (piece.Length > 0) yield return piece;
+                builder.Clear();
+            }
+        }
+    }
+
+    private void Finish()
+    {
+        if (_current is not null) _current.IsSpeaking = false;
+        _current = null;
+    }
+
+    public void Dispose()
+    {
+        Stop();
+        _player?.Dispose();
+        _synthesizer?.Dispose();
+        _player = null;
+        _synthesizer = null;
+    }
 }

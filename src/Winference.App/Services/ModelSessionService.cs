@@ -350,4 +350,58 @@ internal sealed class ModelSessionService(
         }
         finally { shell.ClearModelActivity(); }
     }
+
+    private async Task ReviewGpuAsync(GpuModelRegistration model)
+    {
+        try
+        {
+            shell.ReportModelActivity("Checking GPU setup requirements…");
+            var runtime = await gpuRuntime.InspectAsync(lifetime.Token);
+            if (lifetime.IsClosing) return;
+            shell.ClearModelActivity();
+            // Installed models load straight away; only a download needs the user's consent.
+            if (!runtime.IsInstalled && !await dialogs.ConfirmAsync("Download the GPU component?",
+                [
+                    model.DisplayName,
+                    $"Required GPU component: {StorageCheck.Format(runtime.DownloadBytes)} download.",
+                    "The current model will stop before this one loads. A running reply will stop; its partial text, conversation and draft are kept."
+                ], "Download component and load", primaryIsDefault: true)) return;
+            await SwitchActivationAsync(CreateGpuActivation(model, allowComponentDownload: !runtime.IsInstalled),
+                alreadyConfirmed: !runtime.IsInstalled);
+        }
+        catch (OperationCanceledException) when (lifetime.IsClosing) { }
+        catch (Exception error)
+        {
+            if (!lifetime.IsClosing) shell.ReportShellError(UserMessage(error, "GPU setup could not be prepared. Your saved selection, model files and chats were kept."));
+        }
+        finally { shell.ClearModelActivity(); }
+    }
+
+    private async Task SwitchNpuAsync(SetupModel model)
+    {
+        var previous = shell.Chat;
+        try
+        {
+            if (!await ConfirmBusySwitchAsync()) return;
+            previous?.SetSwitching(true, "Checking the selected model…");
+            shell.ReportModelActivity($"Checking {model.DisplayName}…");
+            var preparation = await activations.PrepareNpuAsync(model, Math.Min(2048, model.SuggestedContextLength),
+                ModelProgress(), lifetime.Token);
+            var prepared = preparation.Prepared;
+            await SwitchActivationAsync(CreateNpuActivation(model, prepared.Profile, prepared, preparation.Service), alreadyConfirmed: true);
+        }
+        catch (OperationCanceledException) when (lifetime.IsClosing) { }
+        catch (Exception error)
+        {
+            if (!lifetime.IsClosing) shell.ReportShellError(UserMessage(error,
+                "The selected model could not be checked. Your previous model, chats and draft were kept."));
+        }
+        finally
+        {
+            previous?.SetSwitching(false);
+            shell.ClearModelActivity();
+        }
+    }
+
+    private static string UserMessage(Exception error, string fallback) => error is RuntimeException runtime ? runtime.Message : fallback;
 }

@@ -96,4 +96,33 @@ public static class WindowsDocumentReader
             builder.AppendLine($"[Only the first {MaxPdfPages} of {document.PageCount} pages were read.]");
         return builder.ToString();
     }
+
+    private static async Task<string> ReadImageAsync(StorageFile file, OcrEngine engine, IProgress<string>? progress, CancellationToken token)
+    {
+        progress?.Report("Reading text in the picture…");
+        token.ThrowIfCancellationRequested();
+        using var stream = await file.OpenReadAsync();
+        return await RecognizeAsync(stream, engine);
+    }
+
+    /// <summary>Decodes an image stream, shrinks it to the OCR size limit if needed, and returns the text line by line.</summary>
+    private static async Task<string> RecognizeAsync(IRandomAccessStream stream, OcrEngine engine)
+    {
+        stream.Seek(0);
+        var decoder = await BitmapDecoder.CreateAsync(stream);
+        var max = OcrEngine.MaxImageDimension;
+        var transform = new BitmapTransform();
+        var longSide = Math.Max(decoder.PixelWidth, decoder.PixelHeight);
+        if (longSide > max)
+        {
+            var scale = (double)max / longSide;
+            transform.ScaledWidth = (uint)(decoder.PixelWidth * scale);
+            transform.ScaledHeight = (uint)(decoder.PixelHeight * scale);
+            transform.InterpolationMode = BitmapInterpolationMode.Fant;
+        }
+        using var bitmap = await decoder.GetSoftwareBitmapAsync(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+            transform, ExifOrientationMode.RespectExifOrientation, ColorManagementMode.DoNotColorManage);
+        var result = await engine.RecognizeAsync(bitmap);
+        return string.Join('\n', result.Lines.Select(line => line.Text));
+    }
 }

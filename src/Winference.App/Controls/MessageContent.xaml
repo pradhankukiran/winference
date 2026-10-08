@@ -1,0 +1,57 @@
+<UserControl
+    x:Class="Winference.App.Controls.MessageContent"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="Content_Loaded" Unloaded="Content_Unloaded">
+    <UserControl.Resources>
+        <Style x:Key="MessageParagraphStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="LineHeight" Value="22" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="IsTextSelectionEnabled" Value="True" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+        </Style>
+        <Style x:Key="MessageHeadingStyle" TargetType="TextBlock" BasedOn="{StaticResource MessageParagraphStyle}">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,6,0,0" />
+        </Style>
+        <Style x:Key="MessageCodeStyle" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="LineHeight" Value="21" />
+            <Setter Property="IsTextSelectionEnabled" Value="True" />
+            <Setter Property="TextWrapping" Value="NoWrap" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+        </Style>
+        <Style x:Key="MessageCodeSurfaceStyle" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource ControlFillColorSecondaryBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style x:Key="MessageQuoteStyle" TargetType="Border">
+            <Setter Property="BorderBrush" Value="{ThemeResource TextFillColorTertiaryBrush}" />
+            <Setter Property="BorderThickness" Value="2,0,0,0" />
+            <Setter Property="Padding" Value="14,2,0,2" />
+        </Style>
+        <Style x:Key="MessageUserSurfaceStyle" TargetType="Border">
+            <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="Padding" Value="14,10" />
+        </Style>
+        <Style x:Key="MessageAssistantSurfaceStyle" TargetType="Border">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+    </UserControl.Resources>
+    <StackPanel Spacing="8">
+        <Border x:Name="MessageSurface" Style="{StaticResource MessageAssistantSurfaceStyle}">
+            <StackPanel x:Name="Blocks" Spacing="10" HorizontalAlignment="Stretch" />
+        </Border>
+        <InfoBar x:Name="CopyNotice" IsOpen="False" IsClosable="True" Severity="Error"
+                 Message="Windows could not copy the code. Select the text and try copying again."
+                 AutomationProperties.LiveSetting="Polite" />
+    </StackPanel>
+</UserControl>

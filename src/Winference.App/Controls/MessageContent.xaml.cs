@@ -88,4 +88,87 @@ public sealed partial class MessageContent : UserControl
         while (_rendered.Count > blocks.Count)
         { _rendered.RemoveAt(blocks.Count); Blocks.Children.RemoveAt(blocks.Count); }
     }
+
+    private RenderedBlock CreateBlock(MessageBlock block)
+    {
+        if (block.Kind == MessageBlockKind.Code) return CreateCode(block);
+        if (block.Kind == MessageBlockKind.Table) return CreateTable(block);
+        var text = Paragraph();
+        FrameworkElement element = text;
+        TextBlock? marker = null;
+        if (block.Kind == MessageBlockKind.ListItem)
+        {
+            var grid = new Grid { ColumnSpacing = 10 };
+            grid.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+            marker = Paragraph();
+            marker.MinWidth = 14;
+            Grid.SetColumn(text, 1);
+            grid.Children.Add(marker);
+            grid.Children.Add(text);
+            element = grid;
+        }
+        else if (block.Kind == MessageBlockKind.Quote)
+            element = new Border { Style = (Style)Resources["MessageQuoteStyle"], Child = text };
+        var rendered = new RenderedBlock(block.Kind, element, IsUser, value =>
+        {
+            if (IsUser) text.Text = value.Text;
+            else SetInlineText(text, value.Text);
+            if (value.Kind == MessageBlockKind.Heading)
+            {
+                text.Style = (Style)Resources["MessageHeadingStyle"];
+                text.FontSize = value.Level == 1 ? 24 : value.Level == 2 ? 20 : 17;
+                text.LineHeight = value.Level <= 2 ? 30 : 25;
+                AutomationProperties.SetHeadingLevel(text, (AutomationHeadingLevel)Math.Min(value.Level, 6));
+            }
+            if (marker is not null)
+            {
+                marker.Text = value.Detail;
+                element.Margin = new Thickness(value.Level * 14, 0, 0, 0);
+            }
+        });
+        rendered.Update(block);
+        return rendered;
+    }
+
+    private RenderedBlock CreateCode(MessageBlock block)
+    {
+        var title = new TextBlock { Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+        var copy = new Button { Content = "Copy code", MinHeight = 28, Padding = new Thickness(10, 4, 10, 4) };
+        AutomationProperties.SetName(copy, "Copy code");
+        var toolbar = new Grid { ColumnSpacing = 12, Padding = new Thickness(14, 10, 10, 0) };
+        toolbar.ColumnDefinitions.Add(new() { Width = new(1, GridUnitType.Star) });
+        toolbar.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        Grid.SetColumn(copy, 1);
+        toolbar.Children.Add(title);
+        toolbar.Children.Add(copy);
+        var text = new TextBlock { Style = (Style)Resources["MessageCodeStyle"], Margin = new Thickness(14, 10, 14, 14) };
+        var scroll = new ScrollViewer { Content = text, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Enabled, VerticalScrollMode = ScrollMode.Disabled };
+        var body = new StackPanel { Spacing = 0 };
+        body.Children.Add(toolbar);
+        body.Children.Add(scroll);
+        var surface = new Border { Style = (Style)Resources["MessageCodeSurfaceStyle"], Child = body };
+        var payload = string.Empty;
+        copy.Click += (_, _) =>
+        {
+            try
+            {
+                var package = new DataPackage();
+                package.SetText(payload);
+                Clipboard.SetContent(package);
+                CopyNotice.IsOpen = false;
+                copy.Content = "Copied";
+            }
+            catch (Exception) { CopyNotice.IsOpen = true; copy.Content = "Copy code"; }
+        };
+        var rendered = new RenderedBlock(block.Kind, surface, false, value =>
+        {
+            title.Text = string.IsNullOrWhiteSpace(value.Detail) ? "Code" : value.Detail;
+            text.Text = payload = value.Text;
+            copy.Content = "Copy code";
+            copy.IsEnabled = payload.Length > 0;
+        });
+        rendered.Update(block);
+        return rendered;
+    }
 }

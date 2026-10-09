@@ -171,4 +171,60 @@ public sealed partial class MessageContent : UserControl
         rendered.Update(block);
         return rendered;
     }
+
+    private RenderedBlock CreateTable(MessageBlock block)
+    {
+        var grid = new Grid();
+        var scroll = new ScrollViewer { Content = grid, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Enabled, VerticalScrollMode = ScrollMode.Disabled };
+        var surface = new Border { Style = (Style)Resources["MessageCodeSurfaceStyle"], Child = scroll };
+        var rendered = new RenderedBlock(block.Kind, surface, false, value =>
+        {
+            grid.Children.Clear(); grid.RowDefinitions.Clear(); grid.ColumnDefinitions.Clear();
+            if (value.Rows is not { Count: > 0 } rows) return;
+            foreach (var _ in rows[0]) grid.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+            for (var row = 0; row < rows.Count; row++)
+            {
+                grid.RowDefinitions.Add(new() { Height = GridLength.Auto });
+                for (var column = 0; column < rows[row].Count; column++)
+                {
+                    var text = Paragraph();
+                    text.MinWidth = 80; text.MaxWidth = 320;
+                    if (row == 0) text.Style = (Style)Resources["MessageHeadingStyle"];
+                    SetInlineText(text, rows[row][column]);
+                    var cell = new Border { Padding = new Thickness(12, 8, 12, 8), Child = text };
+                    Grid.SetRow(cell, row); Grid.SetColumn(cell, column);
+                    grid.Children.Add(cell);
+                }
+            }
+        });
+        rendered.Update(block);
+        return rendered;
+    }
+
+    private TextBlock Paragraph() => new() { Style = (Style)Resources["MessageParagraphStyle"] };
+
+    private static void SetInlineText(TextBlock text, string value)
+    {
+        text.Inlines.Clear();
+        foreach (var inline in MessageFormatting.ParseInline(value))
+        {
+            var run = new Run { Text = inline.Text };
+            if (inline.Kind == MessageInlineKind.Strong)
+            { var bold = new Bold(); bold.Inlines.Add(run); text.Inlines.Add(bold); }
+            else
+            {
+                if (inline.Kind == MessageInlineKind.Code) run.FontFamily = new FontFamily("Consolas");
+                text.Inlines.Add(run);
+            }
+        }
+    }
+
+    private sealed class RenderedBlock(MessageBlockKind kind, FrameworkElement element, bool plain, Action<MessageBlock> update)
+    {
+        public MessageBlockKind Kind { get; } = kind;
+        public FrameworkElement Element { get; } = element;
+        public bool Plain { get; } = plain;
+        public string Source { get; private set; } = string.Empty;
+        public void Update(MessageBlock value) { update(value); Source = value.Source; }
+    }
 }

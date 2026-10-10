@@ -52,4 +52,56 @@ public sealed partial class ModelListControl : UserControl
         };
         _applyingFilter = false;
     }
+
+    private void FilterBar_SelectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
+    {
+        if (_applyingFilter) return;
+        Library.Filter = ReferenceEquals(sender.SelectedItem, NpuFilter) ? ModelFilter.Npu
+            : ReferenceEquals(sender.SelectedItem, GpuNpuFilter) ? ModelFilter.GpuNpu
+            : ReferenceEquals(sender.SelectedItem, GpuFilter) ? ModelFilter.Gpu
+            : ModelFilter.All;
+    }
+
+    private async void Action_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: ModelEntryViewModel { CanAct: true } entry }) return;
+        ActionInvoked?.Invoke(this, EventArgs.Empty);
+        await Library.PerformAsync(entry);
+    }
+
+    private void More_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: ModelEntryViewModel entry } target) return;
+        var menu = new MenuFlyout();
+        var details = new MenuFlyoutItem { Text = "Details" };
+        details.Click += (_, _) => ShowDetails(entry, target);
+        AutomationProperties.SetAutomationId(details, "ModelDetails");
+        menu.Items.Add(details);
+        if (entry.CanRemove)
+        {
+            var remove = new MenuFlyoutItem { Text = "Remove" };
+            remove.Click += async (_, _) => await Library.RemoveAsync(entry);
+            AutomationProperties.SetName(remove, entry.RemoveAutomationName);
+            AutomationProperties.SetAutomationId(remove, "RemoveModel");
+            menu.Items.Add(remove);
+        }
+        menu.ShowAt(target);
+    }
+
+    private static void ShowDetails(ModelEntryViewModel entry, FrameworkElement target)
+    {
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock { Text = entry.Name, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        content.Children.Add(new TextBlock { Text = entry.Publisher, TextWrapping = TextWrapping.Wrap, Opacity = 0.75 });
+        content.Children.Add(new TextBlock { Text = entry.Description, TextWrapping = TextWrapping.Wrap });
+        content.Children.Add(new TextBlock { Text = entry.DetailsText, FontSize = 12, Opacity = 0.85, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
+        new Flyout
+        {
+            Content = new ScrollViewer
+            {
+                Content = content, MaxHeight = 360, MaxWidth = 420,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
+            }
+        }.ShowAt(target);
+    }
 }

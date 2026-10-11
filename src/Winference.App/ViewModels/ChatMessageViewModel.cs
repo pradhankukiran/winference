@@ -153,4 +153,44 @@ public sealed class ChatMessageViewModel(ChatSpeaker speaker, string text = "") 
         get => _isLatestReply;
         set { if (_isLatestReply == value) return; _isLatestReply = value; OnPropertyChanged(); OnPropertyChanged(nameof(RegenerateVisibility)); }
     }
+
+    public bool CanEdit
+    {
+        get => _canEdit;
+        set { if (_canEdit == value) return; _canEdit = value; OnPropertyChanged(); OnPropertyChanged(nameof(EditVisibility)); }
+    }
+
+    /// <summary>Speed and hardware for this reply. Shown for replies written in this session only.</summary>
+    public string Stats
+    {
+        get => _stats;
+        set { if (_stats == value) return; _stats = value ?? string.Empty; OnPropertyChanged(); OnPropertyChanged(nameof(StatsVisibility)); }
+    }
+
+    public Visibility RegenerateVisibility => _isLatestReply ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility EditVisibility => _canEdit ? Visibility.Visible : Visibility.Collapsed;
+    public Visibility StatsVisibility => _stats.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    public string SpeakGlyph => _isSpeaking ? "\uE71A" : "\uE767";
+    public string SpeakLabel => _isSpeaking ? "Stop reading" : "Read aloud";
+
+    /// <summary>Describes a real in-progress or terminal result, such as Thinking, Stopped, or Interrupted.</summary>
+    public string Status
+    {
+        get => _status;
+        set
+        {
+            value ??= string.Empty;
+            if (_status == value) return;
+            _status = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasStatus));
+            OnPropertyChanged(nameof(StatusVisibility));
+        }
+    }
+
+    public bool HasStatus => _status.Length > 0;
+    public Visibility StatusVisibility => HasStatus ? Visibility.Visible : Visibility.Collapsed;
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

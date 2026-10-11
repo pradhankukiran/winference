@@ -75,4 +75,82 @@ public sealed class ChatMessageViewModel(ChatSpeaker speaker, string text = "") 
             OnPropertyChanged(nameof(ImageVisibility));
         }
     }
+
+    public bool HasText => _text.Length > 0;
+
+    // Generated images are saved as files and referenced from the message text, so saved chats need no new fields.
+    private const string ImagePrefix = "![Generated image](winference-image:";
+    private Microsoft.UI.Xaml.Media.Imaging.BitmapImage? _image;
+
+    /// <summary>Folder that generated images are stored under. Set once at startup.</summary>
+    public static string? ImagesRoot { get; set; }
+
+    public static string ImageMarker(string relativePath) => ImagePrefix + relativePath.Replace('\\', '/') + ")";
+
+    /// <summary>The image file referenced by this message, relative to <see cref="ImagesRoot"/>.</summary>
+    public string? ImageRelativePath
+    {
+        get
+        {
+            if (!_text.StartsWith(ImagePrefix, StringComparison.Ordinal)) return null;
+            var end = _text.IndexOf(')', ImagePrefix.Length);
+            if (end < 0) return null;
+            var relative = _text[ImagePrefix.Length..end];
+            return relative.Contains("..") || System.IO.Path.IsPathRooted(relative) ? null : relative;
+        }
+    }
+
+    /// <summary>The text shown, copied and read aloud: the message without its image reference.</summary>
+    public string DisplayText
+    {
+        get
+        {
+            if (ImageRelativePath is null) return _text;
+            var end = _text.IndexOf(')', ImagePrefix.Length);
+            return _text[(end + 1)..].TrimStart('\r', '\n');
+        }
+    }
+
+    public Microsoft.UI.Xaml.Media.ImageSource? ImageSource
+    {
+        get
+        {
+            if (_image is not null) return _image;
+            if (ImageRelativePath is not { } relative || ImagesRoot is null) return null;
+            var path = System.IO.Path.Combine(ImagesRoot, relative);
+            if (!System.IO.File.Exists(path)) return null;
+            _image = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(path));
+            return _image;
+        }
+    }
+
+    public Visibility ImageVisibility => ImageRelativePath is not null ? Visibility.Visible : Visibility.Collapsed;
+
+    private bool _isSpeaking;
+    /// <summary>True while this reply is being read aloud.</summary>
+    public bool IsSpeaking
+    {
+        get => _isSpeaking;
+        set
+        {
+            if (_isSpeaking == value) return;
+            _isSpeaking = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SpeakGlyph));
+            OnPropertyChanged(nameof(SpeakLabel));
+        }
+    }
+
+    public Visibility SpeakVisibility => IsAssistant ? Visibility.Visible : Visibility.Collapsed;
+
+    private bool _isLatestReply;
+    private bool _canEdit;
+    private string _stats = string.Empty;
+
+    /// <summary>The newest reply, when it can be regenerated.</summary>
+    public bool IsLatestReply
+    {
+        get => _isLatestReply;
+        set { if (_isLatestReply == value) return; _isLatestReply = value; OnPropertyChanged(); OnPropertyChanged(nameof(RegenerateVisibility)); }
+    }
 }

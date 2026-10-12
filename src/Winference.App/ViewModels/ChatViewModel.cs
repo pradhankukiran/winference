@@ -142,4 +142,89 @@ public sealed class ChatViewModel : INotifyPropertyChanged
     public bool HasPendingImage => _pendingImage is not null;
     public Microsoft.UI.Xaml.Media.ImageSource? PendingImageSource => _pendingImage is null || _features is null ? null
         : new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(System.IO.Path.Combine(_features.ImagesRoot, _pendingImage)));
+
+    /// <summary>Shrinks a picture and holds it for the next message. Returns a message for the user if it failed.</summary>
+    public async Task<string?> AttachImageAsync(string path)
+    {
+        if (!SupportsImages || _generating) return "This model can't see pictures.";
+        try
+        {
+            var bytes = await Winference.App.Services.ImagePreparation.PrepareAsync(path);
+            var relative = System.IO.Path.Combine(_conversationId.ToString("N"), "sent-" + Guid.NewGuid().ToString("N") + ".jpg");
+            var full = System.IO.Path.Combine(_features!.ImagesRoot, relative);
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(full)!);
+            await System.IO.File.WriteAllBytesAsync(full, bytes);
+            RemovePendingImage();
+            PendingImage = relative;
+            return null;
+        }
+        catch (RuntimeException error) { return error.Message; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return "The picture couldn't be saved in Winference's data folder.";
+        }
+    }
+
+    public void RemovePendingImage()
+    {
+        if (_pendingImage is null) return;
+        try { System.IO.File.Delete(System.IO.Path.Combine(_features!.ImagesRoot, _pendingImage)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        PendingImage = null;
+    }
+
+    private byte[]? ReadImage(string? relative)
+    {
+        if (relative is null || _features is null) return null;
+        try { return System.IO.File.ReadAllBytes(System.IO.Path.Combine(_features.ImagesRoot, relative)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>The microphone shows once a speech add-on is installed.</summary>
+    public bool HasSpeechInput => _features?.Media?.ActiveModel(Winference.Core.Media.MediaKind.SpeechInput) is not null;
+    public bool HasImageAddon => _features?.Media?.ActiveModel(Winference.Core.Media.MediaKind.Image) is not null;
+    public bool CanDictate => HasSpeechInput && !_shuttingDown && !IsDraftReadOnly;
+    public bool CanStartImage => HasImageAddon && !_generating && !_shuttingDown;
+    public const string ImageCommand = "/image ";
+
+    private void Media_Changed(object? sender, EventArgs args)
+    {
+        OnPropertyChanged(nameof(HasSpeechInput));
+        OnPropertyChanged(nameof(HasImageAddon));
+        OnPropertyChanged(nameof(CanDictate));
+        OnPropertyChanged(nameof(CanStartImage));
+    }
+
+    /// <summary>Turns a recording into text with the installed speech add-on. Returns the text, or throws a RuntimeException.</summary>
+    public async Task<string> TranscribeAsync(byte[] wav, CancellationToken cancellationToken)
+    {
+        if (_features?.Media is not { } media || media.ActiveModel(Winference.Core.Media.MediaKind.SpeechInput) is not { } model)
+            throw new RuntimeException("speech_unavailable", "Get a speech add-on in Settings first.");
+        MarkActive();
+        return await media.Service.TranscribeAsync(model, wav, cancellationToken);
+    }
+    public string PersistenceError => _history?.SaveError ?? string.Empty;
+    public bool HasPersistenceError => _history?.HasSaveError == true;
+    public bool CanChooseConversation => !_generating && !_modeTransitioning && !_shuttingDown;
+    public bool CanChooseModel => !_modeTransitioning && !_shuttingDown;
+    public ConversationListItem? SelectedConversation
+    {
+        get => _selectedConversation;
+        set
+        {
+            if (value is null || _restoringConversation || value.Id == _conversationId) return;
+            if (!CanChooseConversation)
+            {
+                // WinUI ignores a source refresh inside its own two-way update.
+                _dispatcher.TryEnqueue(() => OnPropertyChanged(nameof(SelectedConversation)));
+                return;
+            }
+            var saved = _history?.Workspace.Conversations.FirstOrDefault(item => item.Id == value.Id);
+            if (saved is null) return;
+            SaveConversation();
+            RestoreConversation(saved);
+            SaveConversation();
+            RefreshConversations();
+        }
+    }
 }

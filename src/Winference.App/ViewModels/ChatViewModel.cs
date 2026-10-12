@@ -322,4 +322,80 @@ public sealed class ChatViewModel : INotifyPropertyChanged
     public string ComposerActionGlyph => ComposerStops ? "\uE71A" : "\uE72A";
     public string ComposerActionName => ComposerStops ? StopActionName : "Send message";
     public bool ShowRetryReply => CanRetryReply && Messages.LastOrDefault()?.AttemptOutcome is "failed" or "interrupted" or "length";
+
+    public string ModelStatus => _snapshot.State is RuntimeState.Ready or RuntimeState.Generating
+        ? $"Ready - {_snapshot.Session?.Device ?? "device unverified"}"
+        : _availability switch
+        {
+            { IsAvailable: true } => "Available",
+            { IsAvailable: false } => "Unavailable",
+            _ => "Not checked"
+        };
+
+    public string ConnectionStatus
+    {
+        get
+        {
+            if (_modeTransitioning && _switchDetail is not null) return "Switching model…";
+            if (!string.IsNullOrWhiteSpace(_operationError)) return "Need attention";
+            if (_snapshot.State == RuntimeState.Stopping) return "Stopping AI";
+            if (_connecting) return "Warming up…";
+            if (_generating) return "Writing reply…";
+            if (_snapshot.State == RuntimeState.Ready) return "Ready";
+            if (_snapshot.State == RuntimeState.Generating) return "Writing reply…";
+            if (_snapshot.State == RuntimeState.Starting) return "Warming up…";
+            if (_snapshot.State == RuntimeState.Stopping) return "Stopping AI";
+            if (_snapshot.State == RuntimeState.Error) return "Need attention";
+            return "Ready";
+        }
+    }
+
+    public string ConnectionDetail
+    {
+        get
+        {
+            if (_modeTransitioning && _switchDetail is not null) return _switchDetail;
+            if (!string.IsNullOrWhiteSpace(_operationError)) return _operationError;
+            if (_connecting) return _loadingDetail;
+            if (_snapshot.Session is { } session)
+                return $"{session.Profile.ProviderModelId} - {session.EffectiveContextLength:N0}-token context.";
+            if (_snapshot.State != RuntimeState.Idle && !string.IsNullOrWhiteSpace(_snapshot.Detail))
+                return _snapshot.Detail;
+            if (_availability is not null) return _availability.Detail;
+            return "Local model is ready. Send a message to start chatting.";
+        }
+    }
+
+    /// <summary>
+    /// A chat with no model has nothing to stop, but must not stay subscribed once it is
+    /// replaced: it would keep saving its older copy of the same conversation.
+    /// </summary>
+    public void DetachIfUnavailable()
+    {
+        if (_allowLoad || _disposed) return;
+        _disposed = true;
+        _broker.Changed -= Broker_Changed;
+        _shell.PropertyChanged -= Shell_PropertyChanged;
+        if (_features?.Media is { } detachMedia) detachMedia.Changed -= Media_Changed;
+        Messages.CollectionChanged -= Messages_CollectionChanged;
+        foreach (var message in Messages) message.PropertyChanged -= Message_PropertyChanged;
+        if (_history is not null) _history.PropertyChanged -= History_PropertyChanged;
+    }
+
+    /// <summary>Call before the window closes; it settles requests and owned processes.</summary>
+    public Task ShutdownAsync()
+    {
+        if (_disposed) return Task.CompletedTask;
+        if (_shutdownTask is not null) return _shutdownTask;
+        _shuttingDown = true;
+        _connectCancellation?.Cancel();
+        _generationCancellation?.Cancel();
+        NotifyStateChanged();
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _shutdownTask = completion.Task;
+        _ = CompleteShutdownAsync(completion);
+        // Idle cleanup can finish synchronously and clear _shutdownTask before
+        // this method returns. Always return the task retained by this caller.
+        return completion.Task;
+    }
 }

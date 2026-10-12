@@ -227,4 +227,99 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             RefreshConversations();
         }
     }
+
+    public Task LoadAsync() => ConnectAsync();
+
+    public ModelProfile Profile => _profile;
+    public ConversationCompatibility? ConversationCompatibility => _conversationProfile.ConversationCompatibility;
+    public bool IsReady => _snapshot.State == RuntimeState.Ready && _snapshot.Session is not null && !_cleanupUnconfirmed;
+    /// <summary>False when chats are open for reading but no usable model is selected.</summary>
+    public bool CanLoadModel => _allowLoad;
+    public bool IsShutDown => _disposed;
+    public bool IsBusy => _connecting || _generating || _modeTransitioning || _shuttingDown;
+    public RuntimeSession? ActiveSession => !_cleanupUnconfirmed && _snapshot.State is RuntimeState.Ready or RuntimeState.Generating
+        ? _snapshot.Session : null;
+    public string ContextNotice => _contextNotice;
+    public bool HasContextNotice => _contextNotice.Length > 0;
+
+    /// <summary>Freeze user operations during preflight without stopping the current engine.</summary>
+    public void SetSwitching(bool switching, string? detail = null)
+    {
+        _modeTransitioning = switching;
+        _switchDetail = switching ? detail ?? "Checking the requested model…" : null;
+        NotifyStateChanged();
+    }
+
+    /// <summary>The transition coordinator needs a failing Task, rather than a ready-looking target.</summary>
+    public async Task LoadForSwitchAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (IsReady) return;
+        if (!CanConnect) throw new RuntimeException("TargetLoadUnavailable", "The target model cannot load while another operation is active.");
+        using var cancel = cancellationToken.Register(() => _connectCancellation?.Cancel());
+        await ConnectAsync();
+        _snapshot = _broker.Snapshot;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsReady || !string.IsNullOrWhiteSpace(_operationError))
+            throw new RuntimeException("TargetLoadFailed", _operationError ?? "The target model did not become ready. Your conversation was kept.");
+    }
+
+    public void ReportLoading(SetupProgress progress)
+    {
+        if (!_dispatcher.HasThreadAccess) { _dispatcher.TryEnqueue(() => ReportLoading(progress)); return; }
+        _loadingDetail = progress.Message;
+        OnPropertyChanged(nameof(ConnectionDetail));
+    }
+
+    public void ReportLoadFailure(string message)
+    {
+        _operationError = message;
+        NotifyStateChanged();
+    }
+
+    public ICommand ConnectCommand { get; }
+    public ICommand DisconnectCommand { get; }
+    public ICommand SendCommand { get; }
+    public ICommand StopCommand { get; }
+    public ICommand NewChatCommand { get; }
+    public ICommand RetryCommand { get; }
+    public bool CanRetryReply => !_shuttingDown && !_shutdownFailed && !_modeTransitioning && !_connecting && !_generating &&
+        !_cleanupUnconfirmed &&
+        (_snapshot.State == RuntimeState.Ready || CanConnect) && RetryPair() is { } pair && pair.Assistant.PreviousAttempts.Count < 32;
+    public string RetryActionHelp => "Retry the last question without adding another user message. The previous reply attempt is kept in saved history.";
+
+    public string DraftMessage
+    {
+        get => _shell.DraftMessage;
+        set => _shell.DraftMessage = value;
+    }
+
+    public bool HasConversation => Messages.Count > 0;
+    public bool IsConnecting => _connecting;
+    public bool IsGenerating => _generating || _snapshot.State == RuntimeState.Generating;
+    public bool CanEditDraft => !_generating && !_modeTransitioning && !_shuttingDown;
+    public bool IsDraftReadOnly => !CanEditDraft;
+    public bool CanStopReply => (_connecting || IsGenerating) && !_shuttingDown;
+    public bool CanDisconnect => !_shuttingDown && !_modeTransitioning && !_connecting && !_generating &&
+        (_snapshot.State == RuntimeState.Ready || _cleanupUnconfirmed || _shutdownFailed);
+    public bool CanConnect => _allowLoad && !_shuttingDown && !_shutdownFailed && !_modeTransitioning && !_connecting && !_generating && !_cleanupUnconfirmed &&
+        _snapshot.State is RuntimeState.Idle or RuntimeState.Error;
+    public bool CanSend => _allowLoad && !_shuttingDown && !_shutdownFailed && !_generating &&
+        (!string.IsNullOrWhiteSpace(DraftMessage) || PendingImage is not null);
+    public bool CanNewChat => !_shuttingDown && !_modeTransitioning && (HasConversation || _shell.HasDraft);
+    public bool HasNotice => !string.IsNullOrWhiteSpace(_operationError) || _snapshot.State == RuntimeState.Error;
+    public bool HasErrorNotice => !string.IsNullOrWhiteSpace(_operationError) || _snapshot.State == RuntimeState.Error;
+    public string RuntimeActionLabel => _snapshot.State == RuntimeState.Error || !string.IsNullOrWhiteSpace(_operationError) ? "Retry" : "Load model";
+    public bool ShowConnectAction => _allowLoad && !_shuttingDown && !_modeTransitioning && !_connecting && !_generating &&
+        _snapshot.State != RuntimeState.Ready && !_cleanupUnconfirmed;
+    public bool ShowDisconnectAction => !_shuttingDown && !_modeTransitioning && !_connecting && !_generating &&
+        (_snapshot.State == RuntimeState.Ready || _cleanupUnconfirmed);
+    public string StopActionName => _connecting ? "Cancel model startup" : "Stop reply";
+    // Send stays running for a whole reply, so one button drives two separate commands.
+    // While a model loads, typed text means "send when ready"; an empty box means the button can cancel.
+    public bool ComposerStops => CanStopReply && !(_connecting && CanSend);
+    public bool CanUseComposerAction => CanStopReply || CanSend;
+    public string ComposerActionGlyph => ComposerStops ? "\uE71A" : "\uE72A";
+    public string ComposerActionName => ComposerStops ? StopActionName : "Send message";
+    public bool ShowRetryReply => CanRetryReply && Messages.LastOrDefault()?.AttemptOutcome is "failed" or "interrupted" or "length";
 }

@@ -76,5 +76,70 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         _allowLoad = allowLoad;
         _features = features;
         if (features?.Media is { } media) media.Changed += Media_Changed;
+
+        ConnectCommand = new AsyncCommand(ConnectAsync, () => CanConnect, HandleCommandFailure);
+        DisconnectCommand = new AsyncCommand(DisconnectAsync, () => CanDisconnect, HandleCommandFailure);
+        SendCommand = new AsyncCommand(SendAsync, () => CanSend, HandleCommandFailure);
+        StopCommand = new AsyncCommand(StopReplyAsync, () => CanStopReply, HandleCommandFailure);
+        NewChatCommand = new AsyncCommand(NewChatAsync, () => CanNewChat, HandleCommandFailure);
+        RetryCommand = new AsyncCommand(RetryAsync, () => CanRetryReply, HandleCommandFailure);
+        Messages.CollectionChanged += Messages_CollectionChanged;
+
+        _broker.Changed += Broker_Changed;
+        _shell.PropertyChanged += Shell_PropertyChanged;
+        if (_history is not null)
+        {
+            _history.PropertyChanged += History_PropertyChanged;
+            RestoreConversation(_history.Open(_modelId, _conversationProfile));
+            SaveConversation();
+            RefreshConversations();
+        }
     }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public ObservableCollection<ChatMessageViewModel> Messages { get; } = [];
+    public ObservableCollection<ConversationListItem> Conversations { get; } = [];
+    /// <summary>Documents attached to the open chat. Their text is offered to the model with each message.</summary>
+    public ObservableCollection<AttachmentItem> Attachments { get; } = [];
+    public bool HasAttachments => Attachments.Count > 0;
+    private string _attachingDetail = string.Empty;
+    /// <summary>Progress while a PDF or picture is read, such as "report.pdf: Reading page 3 of 12…".</summary>
+    public string AttachingDetail
+    {
+        get => _attachingDetail;
+        private set
+        {
+            if (_attachingDetail == value) return;
+            _attachingDetail = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsReadingDocument));
+        }
+    }
+    public bool IsReadingDocument => _attachingDetail.Length > 0;
+    public bool CanAttach => _features is not null && _allowLoad && !_attaching && !_generating && !_shuttingDown &&
+        !_modeTransitioning && Attachments.Count < ConversationAttachmentStore.MaxAttachmentsPerChat;
+    public bool CanRemoveAttachment => !_generating && !_shuttingDown;
+    /// <summary>True when the loaded model can see pictures, so attached pictures are sent as images.</summary>
+    public bool SupportsImages => _profile.SupportsImages && _features is not null;
+
+    private string? _pendingImage;
+    /// <summary>A picture waiting to go with the next message, relative to the images folder.</summary>
+    public string? PendingImage
+    {
+        get => _pendingImage;
+        private set
+        {
+            _pendingImage = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasPendingImage));
+            OnPropertyChanged(nameof(PendingImageSource));
+            OnPropertyChanged(nameof(CanSend));
+            OnPropertyChanged(nameof(CanUseComposerAction));
+            NotifyCommands();
+        }
+    }
+    public bool HasPendingImage => _pendingImage is not null;
+    public Microsoft.UI.Xaml.Media.ImageSource? PendingImageSource => _pendingImage is null || _features is null ? null
+        : new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(System.IO.Path.Combine(_features.ImagesRoot, _pendingImage)));
 }

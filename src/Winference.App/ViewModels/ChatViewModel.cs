@@ -583,4 +583,55 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         else await ConnectAsync();
         _snapshot = _broker.Snapshot;
     }
+
+    /// <summary>
+    /// A cancelled reply takes the runtime down, because it cannot prove an abandoned request
+    /// has stopped. Reloading straight away keeps Stop meaning "end this reply".
+    /// </summary>
+    private void ReloadAfterStop()
+    {
+        _snapshot = _broker.Snapshot;
+        NotifyStateChanged();
+        if (_allowLoad && !_disposed && !_shuttingDown && !_modeTransitioning) Observe(ConnectAsync());
+    }
+
+    private async void Observe(Task task)
+    {
+        try { await task; }
+        catch (Exception error) { HandleCommandFailure(error); }
+    }
+
+    private (ChatMessageViewModel User, ChatMessageViewModel Assistant)? RetryPair() =>
+        Messages.Count >= 2 && Messages[^2].IsUser && Messages[^1].IsAssistant
+            ? (Messages[^2], Messages[^1]) : null;
+
+    private async Task BeginRequestAsync(string prompt, bool retry, string? image = null)
+    {
+        var cancellation = new CancellationTokenSource();
+        _generationCancellation = cancellation;
+        _generationTask = SendCoreAsync(_selectionRevision, _conversationId, Guid.NewGuid(), prompt, retry, cancellation.Token, image);
+        await _generationTask;
+    }
+
+    private IReadOnlyList<ChatMessage> CompletedHistory(int beforeIndex)
+    {
+        var history = new List<ChatMessage>();
+        for (var i = 0; i + 1 < beforeIndex; i++)
+        {
+            var user = Messages[i];
+            var assistant = Messages[i + 1];
+            if (!user.IsUser || !assistant.IsAssistant) continue;
+            // An unanswered tool request in history invites the model to invent its result.
+            if (user.IsContextEligible && assistant.IsContextEligible &&
+                !string.IsNullOrWhiteSpace(user.Text) && !string.IsNullOrWhiteSpace(assistant.Text) &&
+                !ToolExecutionBroker.LooksLikeToolCall(assistant.Text))
+            {
+                // Earlier pictures aren't sent again; their messages keep only their words.
+                history.Add(new("user", user.DisplayText));
+                history.Add(new("assistant", assistant.DisplayText));
+            }
+            i++;
+        }
+        return history;
+    }
 }

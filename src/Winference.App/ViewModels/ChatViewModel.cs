@@ -398,4 +398,116 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         // this method returns. Always return the task retained by this caller.
         return completion.Task;
     }
+
+    private async Task CompleteShutdownAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await ShutdownCoreAsync();
+            completion.TrySetResult();
+        }
+        catch (Exception error) { completion.TrySetException(error); }
+    }
+
+    private async Task ShutdownCoreAsync()
+    {
+        try
+        {
+            await _broker.DisposeAsync();
+            await AwaitOperationAsync(_connectTask);
+            await AwaitOperationAsync(_generationTask);
+            SaveConversation();
+            if (_history is not null) await _history.FlushAsync();
+            _disposed = true;
+            _broker.Changed -= Broker_Changed;
+            _shell.PropertyChanged -= Shell_PropertyChanged;
+            if (_features?.Media is { } shutdownMedia) shutdownMedia.Changed -= Media_Changed;
+            Messages.CollectionChanged -= Messages_CollectionChanged;
+            foreach (var message in Messages) message.PropertyChanged -= Message_PropertyChanged;
+            if (_history is not null) _history.PropertyChanged -= History_PropertyChanged;
+            _connectCancellation?.Dispose();
+            _generationCancellation?.Dispose();
+            _connectCancellation = null;
+            _generationCancellation = null;
+        }
+        catch (Exception error)
+        {
+            _shuttingDown = false;
+            _shutdownFailed = true;
+            _cleanupUnconfirmed = true;
+            _operationError = SafeError(error);
+            throw;
+        }
+        finally
+        {
+            _shutdownTask = null;
+            if (!_disposed) NotifyStateChanged();
+        }
+    }
+
+    private async Task ConnectAsync()
+    {
+        if (!CanConnect) return;
+        var selectionRevision = _selectionRevision;
+        var cancellation = new CancellationTokenSource();
+        _connectCancellation = cancellation;
+        _connectTask = ConnectCoreAsync(selectionRevision, cancellation.Token);
+        await _connectTask;
+    }
+
+    private async Task ConnectCoreAsync(long selectionRevision, CancellationToken cancellationToken)
+    {
+        _connecting = true;
+        _operationError = null;
+        NotifyStateChanged();
+
+        try
+        {
+            if (_activateRuntime is not null)
+            {
+                await _activateRuntime(cancellationToken);
+                _availability = new(true, $"The selected model is ready on {_broker.Snapshot.Session?.Device ?? "its selected device"}.");
+            }
+            else
+            {
+                var availability = await _broker.DiscoverAsync(_profile, cancellationToken);
+                if (!IsCurrentSelection(selectionRevision, cancellationToken)) return;
+                _availability = availability;
+                if (!availability.IsAvailable)
+                {
+                    _operationError = availability.Detail;
+                    return;
+                }
+                await _broker.StartAsync(_profile, cancellationToken);
+            }
+            if (!IsCurrentSelection(selectionRevision, cancellationToken))
+            {
+                await _broker.StopAsync();
+                return;
+            }
+
+            _operationError = null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Mode changes and close cancel this operation intentionally.
+        }
+        catch (Exception error)
+        {
+            _operationError = SafeError(error);
+            _cleanupUnconfirmed = error is RuntimeException { Code: "CleanupUnconfirmed" } ||
+                _operationError.Contains("cleanup could not be confirmed", StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            MarkActive();
+            _connecting = false;
+            if (_connectCancellation?.Token == cancellationToken)
+            {
+                _connectCancellation.Dispose();
+                _connectCancellation = null;
+            }
+            NotifyStateChanged();
+        }
+    }
 }

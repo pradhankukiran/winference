@@ -510,4 +510,77 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             NotifyStateChanged();
         }
     }
+
+    private async Task SendAsync()
+    {
+        if (!CanSend) return;
+        MarkActive();
+        var prompt = DraftMessage;
+        DraftMessage = string.Empty;
+
+        if (prompt.StartsWith(ImageCommand.TrimEnd(), StringComparison.OrdinalIgnoreCase) && HasImageAddon)
+        {
+            var description = prompt[ImageCommand.TrimEnd().Length..].Trim();
+            if (description.Length == 0) { DraftMessage = ImageCommand; return; }
+            var cancellation = new CancellationTokenSource();
+            _generationCancellation = cancellation;
+            _generationTask = CreateImageAsync(_selectionRevision, _conversationId, prompt, description, cancellation.Token);
+            await _generationTask;
+            return;
+        }
+
+        var image = SupportsImages ? _pendingImage : null;
+        if (image is not null && string.IsNullOrWhiteSpace(prompt)) prompt = "Describe this picture.";
+        if (!IsReady)
+        {
+            await EnsureLoadedAsync();
+            if (!IsReady || !string.IsNullOrWhiteSpace(_operationError))
+            {
+                DraftMessage = prompt == "Describe this picture." && image is not null ? string.Empty : prompt;
+                return;
+            }
+        }
+        if (image is not null) { _pendingImage = null; PendingImage = null; }
+        await BeginRequestAsync(prompt, retry: false, image);
+    }
+
+    private async Task RetryAsync()
+    {
+        if (!CanRetryReply || RetryPair() is not { } pair) return;
+        if (!IsReady)
+        {
+            await EnsureLoadedAsync();
+            if (!IsReady || !string.IsNullOrWhiteSpace(_operationError)) return;
+        }
+        await BeginRequestAsync(pair.User.DisplayText, retry: true, SupportsImages ? pair.User.ImageRelativePath : null);
+    }
+
+    /// <summary>Lets go of the model once it has sat unused for the timeout. The chat and draft are untouched.</summary>
+    public void UnloadIfIdle(TimeSpan? timeout)
+    {
+        if (!IdleUnloadPolicy.ShouldUnload(_lastActivityUtc, DateTimeOffset.UtcNow, timeout, IsReady, IsBusy || _disposed)) return;
+        Observe(DisconnectAsync());
+    }
+
+    private void MarkActive() => _lastActivityUtc = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// The model wakes when someone starts typing, so most of the load is over by the time they
+    /// send. A failed load waits for an explicit Retry instead of restarting on every keystroke.
+    /// </summary>
+    private void WakeForTyping()
+    {
+        if (_restoringConversation || string.IsNullOrWhiteSpace(DraftMessage)) return;
+        MarkActive();
+        if (CanConnect && _snapshot.State == RuntimeState.Idle && string.IsNullOrWhiteSpace(_operationError))
+            Observe(ConnectAsync());
+    }
+
+    /// <summary>Joins a load already running, such as the reload after Stop, instead of giving up on it.</summary>
+    private async Task EnsureLoadedAsync()
+    {
+        if (_connecting) await AwaitOperationAsync(_connectTask);
+        else await ConnectAsync();
+        _snapshot = _broker.Snapshot;
+    }
 }

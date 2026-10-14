@@ -858,4 +858,93 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             }
         }
     }
+
+    /// <summary>
+    /// Creates a picture with the image add-on. The chat model isn't needed, and the
+    /// turn is kept out of later prompts because the model can't see images.
+    /// </summary>
+    private async Task CreateImageAsync(long selectionRevision, Guid conversationId, string prompt, string description, CancellationToken cancellationToken)
+    {
+        var attemptId = Guid.NewGuid();
+        _generating = true;
+        _activeAttemptId = attemptId;
+        _operationError = null;
+        NotifyStateChanged();
+        var turnId = Guid.NewGuid();
+        var userTurn = new ChatMessageViewModel(ChatSpeaker.User, prompt) { Id = turnId, TurnId = turnId };
+        var assistantTurn = NewAssistant(turnId, attemptId);
+        assistantTurn.Status = "Creating the image… the first one takes longer while the engine loads.";
+        Messages.Add(userTurn);
+        Messages.Add(assistantTurn);
+        try
+        {
+            var media = _features!.Media!;
+            var model = media.ActiveModel(Winference.Core.Media.MediaKind.Image)
+                ?? throw new RuntimeException("image_unavailable", "Get an image add-on in Settings first.");
+            var png = await media.Service.GenerateImageAsync(model, description, cancellationToken);
+            if (selectionRevision != _selectionRevision || conversationId != _conversationId) return;
+            var relative = System.IO.Path.Combine(conversationId.ToString("N"), attemptId.ToString("N") + ".png");
+            var path = System.IO.Path.Combine(_features.ImagesRoot, relative);
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            await System.IO.File.WriteAllBytesAsync(path, png, CancellationToken.None);
+            assistantTurn.Text = ChatMessageViewModel.ImageMarker(relative) + "\n\n*" + description.Replace("*", "") + "*";
+            assistantTurn.AttemptOutcome = "completed";
+            assistantTurn.Status = string.Empty;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            assistantTurn.AttemptOutcome = "stopped";
+            assistantTurn.Status = "Stopped";
+        }
+        catch (Exception error) when (error is RuntimeException or IOException or UnauthorizedAccessException)
+        {
+            assistantTurn.AttemptOutcome = "failed";
+            assistantTurn.Status = "Image not created";
+            _operationError = error is RuntimeException runtime ? runtime.Message : "The image couldn't be saved. Check Winference's storage access.";
+        }
+        finally
+        {
+            if (_activeAttemptId == attemptId)
+            {
+                _activeAttemptId = null;
+                _generating = false;
+                SaveConversation();
+                RefreshConversations();
+                _generationCancellation?.Dispose();
+                _generationCancellation = null;
+                NotifyStateChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tool instructions and document excerpts for this message, sized so the message and some
+    /// history still fit. Returns null when there is nothing to add.
+    /// </summary>
+    private async Task<string?> BuildSystemPromptAsync(string prompt, bool toolsOn, CancellationToken cancellationToken)
+    {
+        _documentNotice = string.Empty;
+        var instructions = _features?.Instructions().Trim() ?? string.Empty;
+        var toolPrompt = toolsOn ? _features!.Tools.GenerateToolPrompt().Trim() : string.Empty;
+        var fixedPart = string.Join("\n\n", new[] { instructions, toolPrompt }.Where(part => part.Length > 0));
+        if (_documents.ChunkCount == 0) return fixedPart.Length > 0 ? fixedPart : null;
+        var queryVector = await PrepareSearchAsync(prompt, cancellationToken);
+
+        var target = (_profile.ContextLength - _profile.MaxOutputTokens) * 6 / 10;
+        var wholeChars = _documents.Documents.Sum(document => document.Chunks.Sum(chunk => chunk.Content.Length));
+        var maxChars = Math.Min(48_000, Math.Max(800, target * 4));
+        for (var attempt = 0; attempt < 8 && maxChars >= 400; ++attempt, maxChars = maxChars * 2 / 3)
+        {
+            var excerpts = _documents.BuildContextPrompt(prompt, maxChars, queryVector);
+            if (excerpts.Length == 0) continue;
+            var system = fixedPart.Length > 0 ? fixedPart + "\n\n" + excerpts : excerpts;
+            var count = await _broker.CountPromptTokensAsync((ChatMessage[])[new("system", system), new("user", prompt)], cancellationToken);
+            if (count.Tokens > target) continue;
+            if (wholeChars > maxChars)
+                _documentNotice = "Your documents are longer than this model can read at once, so each reply uses the parts that best match your message.";
+            return system;
+        }
+        _documentNotice = "Your documents didn't fit in this model's context, so this reply doesn't use them. Try a shorter message or a model with a larger context.";
+        return fixedPart.Length > 0 ? fixedPart : null;
+    }
 }

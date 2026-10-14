@@ -634,4 +634,228 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         }
         return history;
     }
+
+    private ChatMessageViewModel NewAssistant(Guid turnId, Guid attemptId, IReadOnlyList<SavedChatAttempt>? previous = null) =>
+        new(ChatSpeaker.Assistant)
+        {
+            TurnId = turnId, AttemptId = attemptId, AttemptOutcome = "running", Status = "Thinking…",
+            OriginModelId = _modelId, OriginProfileId = _profile.ProfileId, OriginArtifactId = _profile.ArtifactId,
+            OriginModelName = _shell.ModelName, OriginMode = _profile.ExecutionMode,
+            PreviousAttempts = previous ?? []
+        };
+
+    private async Task SendCoreAsync(long selectionRevision, Guid conversationId, Guid attemptId,
+        string prompt, bool retry, CancellationToken cancellationToken, string? image = null)
+    {
+        _generating = true;
+        _activeAttemptId = attemptId;
+        _operationError = null;
+        NotifyStateChanged();
+        GenerationEvent? terminal = null;
+        ChatMessageViewModel? userTurn = null;
+        ChatMessageViewModel? assistantTurn = null;
+        bool Current() => selectionRevision == _selectionRevision && conversationId == _conversationId &&
+            _activeAttemptId == attemptId && !_shuttingDown;
+
+        try
+        {
+            var pair = retry ? RetryPair() : null;
+            if (retry && pair is null) return;
+            var toolsOn = _features is not null && _features.ToolsEnabled() && _features.Tools.RegisteredTools.Count > 0;
+            IReadOnlyList<ChatMessage> history = CompletedHistory(retry ? Messages.Count - 2 : Messages.Count);
+            if (await BuildSystemPromptAsync(prompt, toolsOn, cancellationToken) is { } system)
+                history = (ChatMessage[])[new("system", system), .. history];
+            var imageBytes = ReadImage(image);
+            if (image is not null && imageBytes is null)
+                throw new RuntimeException("InvalidImage", "The picture for this message is missing. Attach it again.");
+            var imageTokens = imageBytes is null ? 0 : ChatImage.TokenBudget;
+            var context = await ContextWindowPolicy.SelectAsync(history, prompt, _profile.ContextLength,
+                _profile.MaxOutputTokens, async (messages, token) =>
+                {
+                    var count = await _broker.CountPromptTokensAsync(messages, token);
+                    return imageTokens == 0 ? count : new(count.Tokens + imageTokens, false);
+                }, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Current()) return;
+            _contextNotice = context.ExcludedExchanges > 0
+                ? $"{context.ExcludedExchanges} earlier exchange(s) are outside this reply's context. The full conversation is saved."
+                : string.Empty;
+            if (!context.IsExact)
+                _contextNotice += (_contextNotice.Length > 0 ? " " : string.Empty) +
+                    "This model uses a conservative context estimate.";
+            if (_documentNotice.Length > 0)
+                _contextNotice += (_contextNotice.Length > 0 ? " " : string.Empty) + _documentNotice;
+            OnPropertyChanged(nameof(ContextNotice));
+            OnPropertyChanged(nameof(HasContextNotice));
+
+            if (pair is { } previous)
+            {
+                userTurn = previous.User;
+                var old = previous.Assistant;
+                var archived = new SavedChatAttempt(old.AttemptId ?? old.Id, old.Text, old.Status,
+                    old.AttemptOutcome ?? (old.IsContextEligible ? "completed" : "interrupted"),
+                    old.OriginModelId, old.OriginProfileId, old.OriginArtifactId, old.OriginModelName, old.OriginMode);
+                assistantTurn = NewAssistant(userTurn.Id, attemptId, old.PreviousAttempts.Append(archived).ToArray());
+                userTurn.IsContextEligible = false;
+                Messages[^1] = assistantTurn;
+            }
+            else
+            {
+                var turnId = Guid.NewGuid();
+                var shown = image is null ? prompt : ChatMessageViewModel.ImageMarker(image) + "\n\n" + prompt;
+                userTurn = new(ChatSpeaker.User, shown) { Id = turnId, TurnId = turnId };
+                assistantTurn = NewAssistant(turnId, attemptId);
+                Messages.Add(userTurn);
+                Messages.Add(assistantTurn);
+            }
+
+            var messages = context.Messages.ToList();
+            if (imageBytes is not null) messages[^1] = messages[^1] with { Images = (ChatImage[])[new ChatImage("image/jpeg", imageBytes)] };
+            var historyStart = messages.Count > 0 && messages[0].Role == "system" ? 1 : 0;
+            var historyPairs = (messages.Count - historyStart - 1) / 2;
+            var toolNotes = string.Empty;
+            var unreadableTool = false;
+            for (var round = 0; ; ++round)
+            {
+                terminal = null;
+                var reply = new System.Text.StringBuilder();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                TimeSpan? firstToken = null;
+                var deltas = 0;
+                GenerationUsage? usage = null;
+                var temperature = _features?.Temperature() ?? ResponseStyles.DefaultTemperature;
+                await foreach (var item in _broker.GenerateAsync(messages, _profile.MaxOutputTokens, cancellationToken, temperature))
+                {
+                    if (!Current()) break;
+                    switch (item.Kind)
+                    {
+                        case GenerationEventKind.TextDelta:
+                            assistantTurn.Status = string.Empty;
+                            firstToken ??= clock.Elapsed;
+                            deltas++;
+                            reply.Append(item.Text);
+                            assistantTurn.Text += item.Text ?? string.Empty;
+                            break;
+                        case GenerationEventKind.Usage:
+                            usage = item.Usage;
+                            break;
+                        case GenerationEventKind.Completed:
+                        case GenerationEventKind.Cancelled:
+                        case GenerationEventKind.Failed:
+                            terminal = item;
+                            break;
+                    }
+                    if (terminal is not null) break;
+                }
+
+                if (!Current()) return;
+                if (firstToken is { } first && terminal?.Kind == GenerationEventKind.Completed)
+                    assistantTurn.Stats = ReplyStats.Describe(usage, deltas, clock.Elapsed - first, first, _broker.Snapshot.Session);
+                // A tool request ends this round. Its result goes back to the model as the next message.
+                if (!toolsOn || terminal?.Kind != GenerationEventKind.Completed) break;
+                var call = round < MaxToolRounds ? _features!.Tools.ParseToolCall(reply.ToString()) : null;
+                if (call is null)
+                {
+                    // A request that can't be run must not look like an answer, or later turns build on it.
+                    unreadableTool = ToolExecutionBroker.LooksLikeToolCall(reply.ToString());
+                    break;
+                }
+                var outcome = await RunToolAsync(call, assistantTurn, cancellationToken);
+                if (!Current()) return;
+                toolNotes += outcome.Note + "\n\n";
+                assistantTurn.Text = toolNotes;
+                assistantTurn.Status = "Thinking…";
+                messages.Add(new("assistant", reply.ToString().Trim()));
+                messages.Add(new("user", outcome.Message));
+                // Older exchanges make room for the tool result before giving up.
+                while (!await FitsContextAsync(messages, cancellationToken))
+                {
+                    if (historyPairs == 0)
+                        throw new RuntimeException("context_exceeded", "The tool result is too long for this model. Try a smaller file or folder.");
+                    messages.RemoveRange(historyStart, 2);
+                    --historyPairs;
+                }
+            }
+            if (unreadableTool)
+            {
+                assistantTurn.Text = toolNotes + "*The model tried to use a tool but wrote the request in a way Winference couldn't follow, so nothing ran.*";
+                assistantTurn.AttemptOutcome = "failed";
+                assistantTurn.Status = "Tool request not understood. Retry, or try a larger model.";
+                _operationError = null;
+                if (!retry && string.Equals(DraftMessage, prompt, StringComparison.Ordinal)) DraftMessage = string.Empty;
+            }
+            else if (terminal?.Kind == GenerationEventKind.Completed && terminal.FinishReason != "length" &&
+                !string.IsNullOrWhiteSpace(assistantTurn.Text))
+            {
+                userTurn.IsContextEligible = true;
+                assistantTurn.IsContextEligible = true;
+                assistantTurn.AttemptOutcome = "completed";
+                assistantTurn.Status = string.Empty;
+                if (!retry && string.Equals(DraftMessage, prompt, StringComparison.Ordinal)) DraftMessage = string.Empty;
+                _operationError = null;
+            }
+            else if (terminal?.Kind == GenerationEventKind.Cancelled || cancellationToken.IsCancellationRequested)
+            {
+                assistantTurn.AttemptOutcome = "stopped";
+                assistantTurn.Status = "Stopped";
+                _operationError = null;
+            }
+            else if (terminal?.Kind == GenerationEventKind.Completed && terminal.FinishReason == "length")
+            {
+                assistantTurn.AttemptOutcome = "length";
+                assistantTurn.Status = "Reply limit reached";
+                _operationError = null;
+                _contextNotice += (_contextNotice.Length > 0 ? " " : string.Empty) +
+                    "The reply reached its length limit. You can ask a follow-up or retry.";
+                OnPropertyChanged(nameof(ContextNotice));
+                OnPropertyChanged(nameof(HasContextNotice));
+                if (!retry && string.Equals(DraftMessage, prompt, StringComparison.Ordinal)) DraftMessage = string.Empty;
+            }
+            else
+            {
+                assistantTurn.AttemptOutcome = "failed";
+                assistantTurn.Status = "Interrupted";
+                _operationError = terminal?.Error ?? "The reply ended before it completed. Try loading the model again.";
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (assistantTurn is not null)
+            {
+                assistantTurn.AttemptOutcome = "stopped";
+                assistantTurn.Status = "Stopped";
+            }
+        }
+        catch (Exception error)
+        {
+            if (assistantTurn is not null)
+            {
+                assistantTurn.AttemptOutcome = "failed";
+                assistantTurn.Status = "Interrupted";
+            }
+            if (Current()) _operationError = SafeError(error);
+        }
+        finally
+        {
+            if (assistantTurn is { AttemptOutcome: "running" })
+            {
+                assistantTurn.AttemptOutcome = "interrupted";
+                assistantTurn.Status = "Interrupted";
+            }
+            if (_activeAttemptId == attemptId)
+            {
+                MarkActive();
+                _activeAttemptId = null;
+                _generating = false;
+                SaveConversation();
+                RefreshConversations();
+                if (_generationCancellation is not null)
+                {
+                    _generationCancellation.Dispose();
+                    _generationCancellation = null;
+                }
+                NotifyStateChanged();
+            }
+        }
+    }
 }

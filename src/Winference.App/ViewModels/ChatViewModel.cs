@@ -947,4 +947,51 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         _documentNotice = "Your documents didn't fit in this model's context, so this reply doesn't use them. Try a shorter message or a model with a larger context.";
         return fixedPart.Length > 0 ? fixedPart : null;
     }
+
+    /// <summary>
+    /// With a search add-on installed, makes sure every document has embeddings, then embeds
+    /// the question. Returns null, and keyword search is used, if that isn't possible.
+    /// </summary>
+    private async Task<float[]?> PrepareSearchAsync(string prompt, CancellationToken cancellationToken)
+    {
+        if (_features?.Media is not { } media || media.ActiveModel(Winference.Core.Media.MediaKind.Embeddings) is not { } model) return null;
+        var addon = Winference.Core.Media.MediaAddons.Find(model)!;
+        try
+        {
+            foreach (var document in _documents.Documents) await EmbedDocumentAsync(document, model, cancellationToken);
+            var question = prompt.Length > 2000 ? prompt[..2000] : prompt;
+            return (await media.Service.EmbedAsync(model, (string[])[addon.QueryPrefix + question], cancellationToken))[0];
+        }
+        catch (RuntimeException error)
+        {
+            Winference.App.Diagnostics.AppDiagnostics.WriteException("documents.search.failed", error);
+            _documentNotice = "Search by meaning wasn't available for this reply, so your documents were matched by keywords.";
+            return null;
+        }
+    }
+
+    /// <summary>Loads saved embeddings for a document, or computes and saves them.</summary>
+    private async Task EmbedDocumentAsync(LocalDocument document, string model, CancellationToken cancellationToken)
+    {
+        if (_embeddedWith != model)
+        {
+            _documents.ClearEmbeddings();
+            _embeddedWith = model;
+        }
+        if (_documents.HasEmbeddings(document.Id)) return;
+        var conversationId = _conversationId;
+        if (_features!.Attachments.LoadEmbeddings(conversationId, document.Id, model) is { } saved && _documents.SetEmbeddings(document.Id, saved)) return;
+        var addon = Winference.Core.Media.MediaAddons.Find(model)!;
+        var vectors = await _features.Media!.Service.EmbedAsync(model,
+            document.Chunks.Select(chunk => addon.DocumentPrefix + chunk.Content).ToArray(), cancellationToken);
+        if (conversationId != _conversationId || !_documents.SetEmbeddings(document.Id, vectors)) return;
+        try { _features.Attachments.SaveEmbeddings(conversationId, document.Id, model, vectors); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { }
+    }
+
+    private async Task<bool> FitsContextAsync(IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken)
+    {
+        var count = await _broker.CountPromptTokensAsync(messages, cancellationToken);
+        return (long)count.Tokens + _profile.MaxOutputTokens <= _profile.ContextLength;
+    }
 }

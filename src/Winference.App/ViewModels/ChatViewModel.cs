@@ -1161,4 +1161,58 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         RefreshConversations();
         NotifyStateChanged();
     }
+
+    private bool IsCurrentSelection(long revision, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested && revision == _selectionRevision && !_shuttingDown;
+
+    private void Broker_Changed(object? sender, RuntimeSnapshot snapshot)
+    {
+        _dispatcher.TryEnqueue(() =>
+        {
+            if (_disposed || snapshot.Revision < _snapshot.Revision) return;
+            _snapshot = snapshot;
+            if (snapshot.State == RuntimeState.Error && snapshot.Detail.Contains("cleanup could not be confirmed", StringComparison.OrdinalIgnoreCase))
+                _cleanupUnconfirmed = true;
+            else if (snapshot.State == RuntimeState.Idle && snapshot.Detail == "AI stopped")
+                _cleanupUnconfirmed = false;
+            NotifyStateChanged();
+        });
+    }
+
+    private void Shell_PropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName is nameof(ShellViewModel.DraftMessage))
+        {
+            WakeForTyping();
+            SaveConversation();
+            OnPropertyChanged(nameof(DraftMessage));
+            OnPropertyChanged(nameof(CanSend));
+            OnPropertyChanged(nameof(CanUseComposerAction));
+            OnPropertyChanged(nameof(ComposerStops));
+            OnPropertyChanged(nameof(ComposerActionGlyph));
+            OnPropertyChanged(nameof(ComposerActionName));
+            OnPropertyChanged(nameof(CanNewChat));
+            NotifyCommands();
+        }
+    }
+
+    private void Messages_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
+    {
+        if (args.OldItems is not null)
+            foreach (ChatMessageViewModel item in args.OldItems) item.PropertyChanged -= Message_PropertyChanged;
+        if (args.NewItems is not null)
+            foreach (ChatMessageViewModel item in args.NewItems) item.PropertyChanged += Message_PropertyChanged;
+        OnPropertyChanged(nameof(HasConversation));
+        SaveConversation();
+        if (!_restoringConversation) RefreshConversations();
+        NotifyCommands();
+        UpdateLatestReply();
+    }
+
+    // Display-only properties don't need saving.
+    private void Message_PropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName is nameof(ChatMessageViewModel.Text) or nameof(ChatMessageViewModel.Status) or nameof(ChatMessageViewModel.IsContextEligible))
+            SaveConversation();
+    }
 }

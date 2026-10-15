@@ -1065,4 +1065,100 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             OnAttachmentsChanged();
         }
     }
+
+    public void RemoveAttachment(string id)
+    {
+        if (_features is null || !CanRemoveAttachment) return;
+        try { _features.Attachments.Remove(_conversationId, id); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        _documents.RemoveDocument(id);
+        if (Attachments.FirstOrDefault(item => item.Id == id) is { } existing) Attachments.Remove(existing);
+        OnAttachmentsChanged();
+    }
+
+    private void OnAttachmentsChanged()
+    {
+        OnPropertyChanged(nameof(HasAttachments));
+        OnPropertyChanged(nameof(CanAttach));
+        OnPropertyChanged(nameof(CanRemoveAttachment));
+    }
+
+    private async Task StopReplyAsync()
+    {
+        if (_connecting)
+        {
+            _connectCancellation?.Cancel();
+            await _broker.StopAsync();
+            await AwaitOperationAsync(_connectTask);
+            NotifyStateChanged();
+            return;
+        }
+        _generationCancellation?.Cancel();
+        await AwaitOperationAsync(_generationTask);
+        await _broker.StopAsync();
+        ReloadAfterStop();
+    }
+
+    private async Task DisconnectAsync()
+    {
+        _connectCancellation?.Cancel();
+        _generationCancellation?.Cancel();
+        await _broker.StopAsync();
+        await AwaitOperationAsync(_connectTask);
+        await AwaitOperationAsync(_generationTask);
+        _operationError = null;
+        NotifyStateChanged();
+    }
+
+    private async Task NewChatAsync()
+    {
+        var stopped = _generating;
+        if (stopped)
+        {
+            _generationCancellation?.Cancel();
+            await AwaitOperationAsync(_generationTask);
+            await _broker.StopAsync();
+        }
+
+        ++_selectionRevision;
+        SaveConversation();
+        RestoreConversation(ConversationSession.New(_modelId, _conversationProfile));
+        SaveConversation();
+        RefreshConversations();
+        if (_allowLoad) _operationError = null;
+        if (stopped) ReloadAfterStop();
+        else NotifyStateChanged();
+    }
+
+    public void RenameConversation(Guid id, string title)
+    {
+        if (_history?.Rename(id, title) == true) RefreshConversations();
+    }
+
+    /// <summary>Removes a chat. Deleting the open one moves to the next, or to a new empty chat.</summary>
+    public void DeleteConversation(Guid id)
+    {
+        if (_history is null || !CanChooseConversation) return;
+        var wasOpen = id == _conversationId;
+        if (!_history.Delete(id)) return;
+        _features?.Attachments.DeleteConversation(id);
+        if (_features is not null)
+        {
+            try
+            {
+                var images = System.IO.Path.Combine(_features.ImagesRoot, id.ToString("N"));
+                if (System.IO.Directory.Exists(images)) System.IO.Directory.Delete(images, recursive: true);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+        if (wasOpen)
+        {
+            var next = _history.Workspace.Conversations.FirstOrDefault(item => item.Id == _history.Workspace.ActiveConversationId)
+                ?? ConversationSession.New(_modelId, _conversationProfile);
+            RestoreConversation(next);
+            SaveConversation();
+        }
+        RefreshConversations();
+        NotifyStateChanged();
+    }
 }

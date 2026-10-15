@@ -994,4 +994,75 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         var count = await _broker.CountPromptTokensAsync(messages, cancellationToken);
         return (long)count.Tokens + _profile.MaxOutputTokens <= _profile.ContextLength;
     }
+
+    /// <summary>Runs one requested tool, asking first when it can see the user's files.</summary>
+    private async Task<(string Note, string Message)> RunToolAsync(ToolCall call, ChatMessageViewModel turn, CancellationToken cancellationToken)
+    {
+        var tool = _features!.Tools.Find(call.Name)!;
+        var label = BuiltInTools.ResolvePath(call.Arguments) is { } path ? $"{call.Name} on {path}" : call.Name;
+        if (tool.AsksFirst)
+        {
+            turn.Status = "Waiting for your permission…";
+            var allowed = await _features.ConfirmTool(call, tool);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!allowed)
+                return ($"*You didn't allow {label}.*",
+                    $"The user did not allow {call.Name} to run. Answer without it and say what you could not check.");
+        }
+        turn.Status = $"Using {call.Name}…";
+        var result = await _features.Tools.ExecuteAsync(call, cancellationToken);
+        return ($"*Used {label}.*",
+            $"Result of {call.Name}:\n{result}\n\nUse this result to answer my earlier message. Don't request the same tool again with the same arguments.");
+    }
+
+    private void ReloadAttachments()
+    {
+        RemovePendingImage();
+        Attachments.Clear();
+        _documents = _features is null || _conversationId == Guid.Empty ? new() : _features.Attachments.LoadIndex(_conversationId);
+        _embeddedWith = null;
+        if (_features is not null && _conversationId != Guid.Empty)
+            foreach (var item in _features.Attachments.List(_conversationId)) Attachments.Add(AttachmentItem.From(item));
+        OnAttachmentsChanged();
+    }
+
+    /// <summary>Reads a document and attaches it to the open chat. Returns a message for the user if it failed.</summary>
+    public async Task<string?> AttachAsync(string path)
+    {
+        if (!CanAttach || _features is null) return "Documents can't be attached right now.";
+        _attaching = true;
+        OnAttachmentsChanged();
+        var conversationId = _conversationId;
+        try
+        {
+            var name = System.IO.Path.GetFileName(path);
+            var progress = new Progress<string>(detail => AttachingDetail = $"{name}: {detail}");
+            if (Winference.App.Services.WindowsDocumentReader.NeedsOcr(path)) AttachingDetail = $"{name}: starting…";
+            var text = await Winference.App.Services.WindowsDocumentReader.ReadAsync(path, progress);
+            if (conversationId != _conversationId) return null;
+            var item = await Task.Run(() => _features.Attachments.Add(conversationId, System.IO.Path.GetFileName(path), text));
+            if (conversationId != _conversationId) return null;
+            var document = _documents.AddDocument(item.FileName, text, item.Id);
+            Attachments.Add(AttachmentItem.From(item));
+            // Index for search by meaning now, so the first question doesn't wait. Failure only means keyword search.
+            if (_features.Media?.ActiveModel(Winference.Core.Media.MediaKind.Embeddings) is { } model)
+            {
+                AttachingDetail = $"{item.FileName}: preparing search…";
+                try { await EmbedDocumentAsync(document, model, CancellationToken.None); }
+                catch (RuntimeException error) { Winference.App.Diagnostics.AppDiagnostics.WriteException("documents.index.failed", error); }
+            }
+            return null;
+        }
+        catch (RuntimeException error) { return error.Message; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return "The document could not be saved in Winference's data folder. Check its storage access and try again.";
+        }
+        finally
+        {
+            _attaching = false;
+            AttachingDetail = string.Empty;
+            OnAttachmentsChanged();
+        }
+    }
 }

@@ -1215,4 +1215,52 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         if (args.PropertyName is nameof(ChatMessageViewModel.Text) or nameof(ChatMessageViewModel.Status) or nameof(ChatMessageViewModel.IsContextEligible))
             SaveConversation();
     }
+
+    /// <summary>Marks the newest reply, which is the only one that can be regenerated.</summary>
+    private void UpdateLatestReply()
+    {
+        var latest = Messages.LastOrDefault(item => item.IsAssistant);
+        foreach (var message in Messages) message.IsLatestReply = ReferenceEquals(message, latest) && CanRetryReply;
+        foreach (var message in Messages) message.CanEdit = message.IsUser && !_generating && !_shuttingDown && _allowLoad;
+    }
+
+    /// <summary>
+    /// Puts a sent message back in the draft so it can be changed and sent again. That message and
+    /// everything after it are removed from the chat. Returns false if nothing changed.
+    /// </summary>
+    public bool EditMessage(ChatMessageViewModel message)
+    {
+        if (_generating || _shuttingDown || !_allowLoad || !message.IsUser) return false;
+        var index = Messages.IndexOf(message);
+        if (index < 0) return false;
+        for (var i = Messages.Count - 1; i >= index; i--) Messages.RemoveAt(i);
+        DraftMessage = message.DisplayText;
+        // Its picture goes back with it, ready to send again.
+        if (message.ImageRelativePath is { } picture && SupportsImages) PendingImage = picture;
+        SaveConversation();
+        NotifyStateChanged();
+        return true;
+    }
+
+    /// <summary>How many messages an edit of this message would remove after it.</summary>
+    public int MessagesAfter(ChatMessageViewModel message) => Math.Max(0, Messages.Count - Messages.IndexOf(message) - 1);
+
+    /// <summary>The open chat as Markdown, for saving to a file.</summary>
+    public string ExportMarkdown()
+    {
+        var title = _history?.Workspace.Conversations.FirstOrDefault(item => item.Id == _conversationId)?.Title ?? "Chat";
+        var builder = new System.Text.StringBuilder();
+        builder.Append("# ").AppendLine(title).AppendLine();
+        builder.Append("*Exported from Winference on ").Append(DateTimeOffset.Now.ToString("d MMMM yyyy, HH:mm")).AppendLine("*").AppendLine();
+        if (Attachments.Count > 0)
+            builder.Append("Attached documents: ").AppendLine(string.Join(", ", Attachments.Select(item => item.FileName))).AppendLine();
+        foreach (var message in Messages)
+        {
+            builder.Append("## ").AppendLine(message.IsUser ? "You" : message.SpeakerLabel).AppendLine();
+            var text = message.DisplayText.Trim();
+            if (message.ImageRelativePath is { } image) text = $"[Generated image: {image}]\n\n" + text;
+            builder.AppendLine(text.Length > 0 ? text : "*(" + (message.Status.Length > 0 ? message.Status : "empty") + ")*").AppendLine();
+        }
+        return builder.ToString();
+    }
 }

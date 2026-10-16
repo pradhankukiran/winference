@@ -1339,4 +1339,82 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(HasContextNotice));
         NotifyCommands();
     }
+
+    /// <summary>Says so when this chat's earlier replies came from a different model.</summary>
+    private string ModelChangeNotice(SavedConversation conversation)
+    {
+        var last = Messages.LastOrDefault(item => item.IsAssistant && item.OriginModelId is not null);
+        if (!_allowLoad || !ConversationSession.ModelChanged(last?.OriginModelId, _modelId,
+            conversation.ConversationCompatibility, _conversationProfile.ConversationCompatibility)) return string.Empty;
+        return $"Earlier replies came from {(last!.OriginModelName is { } name ? ModelNames.Clean(name) : "another model")}. {_shell.ModelName} reads them as plain text, so its answers may differ.";
+    }
+
+    public string ConversationQuery
+    {
+        get => _conversationQuery;
+        set
+        {
+            if (_conversationQuery == value) return;
+            _conversationQuery = value ?? string.Empty;
+            RefreshConversations();
+        }
+    }
+
+    private void RefreshConversations()
+    {
+        if (_history is null || _restoringConversation) return;
+        _restoringConversation = true;
+        try
+        {
+            var entries = _history.Search(_conversationQuery)
+                .Select(item => new ConversationListItem(item.Id, item.Title)).ToArray();
+            // Keep item identity stable while text streams; native ComboBox selection then stays stable too.
+            if (!Conversations.SequenceEqual(entries))
+            {
+                Conversations.Clear();
+                foreach (var entry in entries) Conversations.Add(entry);
+            }
+            _selectedConversation = Conversations.FirstOrDefault(item => item.Id == _conversationId);
+            OnPropertyChanged(nameof(SelectedConversation));
+        }
+        finally { _restoringConversation = false; }
+    }
+
+    private void NotifyStateChanged()
+    {
+        OnPropertyChanged(nameof(IsConnecting));
+        OnPropertyChanged(nameof(IsGenerating));
+        OnPropertyChanged(nameof(IsBusy));
+        OnPropertyChanged(nameof(IsReady));
+        OnPropertyChanged(nameof(ActiveSession));
+        OnPropertyChanged(nameof(CanEditDraft));
+        OnPropertyChanged(nameof(IsDraftReadOnly));
+        OnPropertyChanged(nameof(CanStopReply));
+        OnPropertyChanged(nameof(CanDisconnect));
+        OnPropertyChanged(nameof(CanConnect));
+        OnPropertyChanged(nameof(CanSend));
+        OnPropertyChanged(nameof(CanNewChat));
+        OnPropertyChanged(nameof(CanRetryReply));
+        OnPropertyChanged(nameof(CanChooseConversation));
+        OnPropertyChanged(nameof(CanChooseModel));
+        OnPropertyChanged(nameof(CanAttach));
+        OnPropertyChanged(nameof(CanRemoveAttachment));
+        OnPropertyChanged(nameof(CanDictate));
+        OnPropertyChanged(nameof(CanStartImage));
+        OnPropertyChanged(nameof(HasNotice));
+        OnPropertyChanged(nameof(HasErrorNotice));
+        OnPropertyChanged(nameof(RuntimeActionLabel));
+        OnPropertyChanged(nameof(ShowConnectAction));
+        OnPropertyChanged(nameof(ShowDisconnectAction));
+        OnPropertyChanged(nameof(StopActionName));
+        OnPropertyChanged(nameof(CanUseComposerAction));
+        OnPropertyChanged(nameof(ComposerStops));
+        OnPropertyChanged(nameof(ComposerActionGlyph));
+        OnPropertyChanged(nameof(ComposerActionName));
+        OnPropertyChanged(nameof(ShowRetryReply));
+        OnPropertyChanged(nameof(ModelStatus));
+        OnPropertyChanged(nameof(ConnectionStatus));
+        OnPropertyChanged(nameof(ConnectionDetail));
+        NotifyCommands();
+    }
 }

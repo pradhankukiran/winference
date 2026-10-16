@@ -1263,4 +1263,80 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         }
         return builder.ToString();
     }
+
+    public string ExportFileName
+    {
+        get
+        {
+            var title = _history?.Workspace.Conversations.FirstOrDefault(item => item.Id == _conversationId)?.Title ?? "Chat";
+            var safe = new string(title.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? ' ' : c).ToArray()).Trim();
+            return (safe.Length == 0 ? "Chat" : safe[..Math.Min(60, safe.Length)]) + ".md";
+        }
+    }
+
+    private void History_PropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        OnPropertyChanged(nameof(PersistenceError));
+        OnPropertyChanged(nameof(HasPersistenceError));
+    }
+
+    private void SaveConversation()
+    {
+        if (_history is null || _restoringConversation || _conversationId == Guid.Empty) return;
+        var firstQuestion = Messages.FirstOrDefault(item => item.IsUser)?.Text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        // A name the user chose stays; otherwise the first question names the chat.
+        var existing = _history.Workspace.Conversations.FirstOrDefault(item => item.Id == _conversationId);
+        var customTitle = existing?.HasCustomTitle == true;
+        var title = customTitle ? existing!.Title
+            : string.IsNullOrWhiteSpace(firstQuestion) ? "New chat" : firstQuestion[..Math.Min(64, firstQuestion.Length)];
+        _history.Update(new(_conversationId, _modelId, _profile.ProfileId, _profile.ArtifactId,
+            title, DateTimeOffset.UtcNow, DraftMessage,
+            Messages.Select(item => new SavedChatMessage(item.Id, item.IsUser ? "user" : "assistant",
+                item.Text, item.Status, item.IsContextEligible, item.OriginModelId, item.OriginProfileId,
+                item.OriginArtifactId, item.OriginModelName, item.OriginMode, item.TurnId,
+                item.AttemptId, item.AttemptOutcome, item.PreviousAttempts)).ToArray(),
+            _conversationProfile.ConversationCompatibility, customTitle));
+    }
+
+    private void RestoreConversation(SavedConversation conversation)
+    {
+        _restoringConversation = true;
+        try
+        {
+            foreach (var message in Messages) message.PropertyChanged -= Message_PropertyChanged;
+            Messages.Clear();
+            _conversationId = conversation.Id;
+            Guid? lastUserId = null;
+            foreach (var saved in conversation.Messages)
+            {
+                var isUser = saved.Role == "user";
+                if (isUser) lastUserId = saved.Id;
+                Messages.Add(new(saved.Role == "user" ? ChatSpeaker.User : ChatSpeaker.Assistant, saved.Text)
+                {
+                    Id = saved.Id, Status = saved.Status, IsContextEligible = saved.IsContextEligible,
+                    TurnId = saved.TurnId ?? lastUserId,
+                    AttemptId = isUser ? null : saved.AttemptId ?? saved.Id,
+                    AttemptOutcome = isUser ? null : saved.AttemptOutcome ??
+                        (saved.IsContextEligible ? "completed" : saved.Status == "Stopped" ? "stopped" : "interrupted"),
+                    OriginModelId = isUser ? null : saved.OriginModelId ?? conversation.ModelId,
+                    OriginProfileId = isUser ? null : saved.OriginProfileId ?? conversation.ProfileId,
+                    OriginArtifactId = isUser ? null : saved.OriginArtifactId ?? conversation.ArtifactId,
+                    OriginModelName = saved.OriginModelName ?? (_allowLoad && !isUser && conversation.ModelId == _modelId ? _shell.ModelName : null),
+                    OriginMode = saved.OriginMode ?? (!isUser && conversation.ProfileId == _profile.ProfileId &&
+                        conversation.ArtifactId == _profile.ArtifactId ? _profile.ExecutionMode : null),
+                    PreviousAttempts = saved.PreviousAttempts ?? []
+                });
+            }
+            _contextNotice = ModelChangeNotice(conversation);
+            DraftMessage = conversation.Draft;
+            ReloadAttachments();
+        }
+        finally { _restoringConversation = false; }
+        OnPropertyChanged(nameof(HasConversation));
+        OnPropertyChanged(nameof(CanNewChat));
+        OnPropertyChanged(nameof(ShowRetryReply));
+        OnPropertyChanged(nameof(ContextNotice));
+        OnPropertyChanged(nameof(HasContextNotice));
+        NotifyCommands();
+    }
 }

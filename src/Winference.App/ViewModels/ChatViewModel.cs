@@ -1417,4 +1417,102 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(ConnectionDetail));
         NotifyCommands();
     }
+
+    private void NotifyCommands()
+    {
+        UpdateLatestReply();
+        if (ConnectCommand is AsyncCommand connect) connect.NotifyCanExecuteChanged();
+        if (DisconnectCommand is AsyncCommand disconnect) disconnect.NotifyCanExecuteChanged();
+        if (SendCommand is AsyncCommand send) send.NotifyCanExecuteChanged();
+        if (StopCommand is AsyncCommand stop) stop.NotifyCanExecuteChanged();
+        if (NewChatCommand is AsyncCommand newChat) newChat.NotifyCanExecuteChanged();
+        if (RetryCommand is AsyncCommand retry) retry.NotifyCanExecuteChanged();
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+
+    private static string SafeError(Exception error) => error is RuntimeException runtimeError
+        ? runtimeError.Message
+        : "AI could not complete the operation. Check the model and runtime, then try again.";
+
+    private void HandleCommandFailure(Exception error)
+    {
+        _operationError = SafeError(error);
+        _cleanupUnconfirmed = error is RuntimeException { Code: "CleanupUnconfirmed" } ||
+            _operationError.Contains("cleanup could not be confirmed", StringComparison.OrdinalIgnoreCase);
+        NotifyStateChanged();
+    }
+
+    private static async Task AwaitOperationAsync(Task? task)
+    {
+        if (task is null) return;
+        try { await task; }
+        catch (OperationCanceledException) { }
+        catch (RuntimeException) { }
+    }
+
+    private sealed class AsyncCommand(Func<Task> execute, Func<bool> canExecute, Action<Exception> onError) : ICommand
+    {
+        private bool _executing;
+        public event EventHandler? CanExecuteChanged;
+        public bool CanExecute(object? parameter) => !_executing && canExecute();
+        public async void Execute(object? parameter)
+        {
+            if (!CanExecute(parameter)) return;
+            _executing = true;
+            NotifyCanExecuteChanged();
+            try { await execute(); }
+            catch (Exception error) { onError(error); }
+            finally
+            {
+                _executing = false;
+                NotifyCanExecuteChanged();
+            }
+        }
+        public void NotifyCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    }
+}
+
+/// <summary>Services the chat uses beyond the model itself.</summary>
+public sealed record ChatFeatures(
+    ConversationAttachmentStore Attachments,
+    ToolExecutionBroker Tools,
+    Func<bool> ToolsEnabled,
+    Func<ToolCall, LocalTool, Task<bool>> ConfirmTool,
+    Winference.App.Services.MediaSelection? Media = null,
+    string ImagesRoot = "",
+    Func<string>? CustomInstructions = null,
+    Func<double>? ResponseTemperature = null)
+{
+    public string Instructions() => CustomInstructions?.Invoke() ?? string.Empty;
+    public double Temperature() => ResponseTemperature?.Invoke() ?? ResponseStyles.DefaultTemperature;
+}
+
+/// <summary>A short line under a reply: speed, engine and hardware.</summary>
+public static class ReplyStats
+{
+    public static string Describe(GenerationUsage? usage, int deltas, TimeSpan writing, TimeSpan waiting, RuntimeSession? session)
+    {
+        var tokens = usage?.CompletionTokens ?? deltas;
+        var speed = usage?.DecodeTokensPerSecond ?? (writing.TotalSeconds > 0.05 && tokens > 1 ? (tokens - 1) / writing.TotalSeconds : (double?)null);
+        var parts = new List<string>();
+        if (speed is { } value && double.IsFinite(value) && value > 0) parts.Add($"{value:0.#} tokens/s");
+        parts.Add($"{tokens} tokens");
+        parts.Add($"first word in {waiting.TotalSeconds:0.0}s");
+        if (session is not null) parts.Add($"{session.Device} · {session.Engine}");
+        return string.Join(" · ", parts);
+    }
+}
+
+public sealed record AttachmentItem(string Id, string FileName, string SizeLabel)
+{
+    public string RemoveLabel => "Remove " + FileName;
+
+    public static AttachmentItem From(AttachmentInfo info) => new(info.Id, info.FileName, info.SizeBytes switch
+    {
+        < 1024 => $"{info.SizeBytes} B",
+        < 1024 * 1024 => $"{info.SizeBytes / 1024.0:0.#} KB",
+        _ => $"{info.SizeBytes / (1024.0 * 1024):0.#} MB"
+    });
 }

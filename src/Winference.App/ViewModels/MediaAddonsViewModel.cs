@@ -74,4 +74,71 @@ public sealed class MediaAddonsViewModel
             if (item.Addon.Kind != MediaKind.Voice) _selection.Prefer(item.Addon);
         }, "Starting…");
     }
+
+    private async Task RunAsync(MediaAddonItem item, Func<CancellationToken, Task> work, string detail)
+    {
+        using var cancellation = new CancellationTokenSource();
+        item.Begin(cancellation, detail);
+        try { await work(cancellation.Token); }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (RuntimeException error)
+        {
+            await _inform($"{item.Addon.Name} didn't finish", [error.Message]);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or HttpRequestException)
+        {
+            AppDiagnostics.WriteException("media.addon.failed", error);
+            await _inform($"{item.Addon.Name} didn't finish", ["Check your internet connection and free disk space, then try again."]);
+        }
+        finally
+        {
+            item.End();
+            Refresh();
+        }
+    }
+}
+
+public sealed class MediaAddonItem : INotifyPropertyChanged
+{
+    private readonly MediaAddonsViewModel _owner;
+    private string _detail = string.Empty;
+    private double _progress;
+    private bool _indeterminate;
+
+    internal MediaAddonItem(MediaAddon addon, MediaAddonsViewModel owner)
+    {
+        Addon = addon;
+        _owner = owner;
+    }
+
+    public MediaAddon Addon { get; }
+    public string Name => Addon.Name;
+    public string Description => Addon.Description;
+    public string Meta => (Addon.Kind switch
+    {
+        MediaKind.SpeechInput => "Speech input",
+        MediaKind.Voice => "Voice",
+        MediaKind.Embeddings => "Document search",
+        _ => "Images"
+    }) + " · " + Addon.SizeLabel + (IsActive ? " · In use" : IsInstalled ? " · Installed" : string.Empty);
+    public bool IsInstalled { get; private set; }
+    public bool IsActive { get; private set; }
+    public bool IsBusy => Cancellation is not null;
+    internal CancellationTokenSource? Cancellation { get; private set; }
+    public string ActionLabel => IsBusy ? "Cancel" : !IsInstalled ? "Get" : IsActive || Addon.Kind == MediaKind.Voice ? "Remove" : "Use";
+    public string ActionName => ActionLabel + " " + Name;
+    public Visibility BusyVisibility => IsBusy ? Visibility.Visible : Visibility.Collapsed;
+    public double Progress { get => _progress; private set { _progress = value; OnPropertyChanged(); } }
+    public bool IsIndeterminate { get => _indeterminate; private set { _indeterminate = value; OnPropertyChanged(); } }
+
+    public string Detail
+    {
+        get => _detail;
+        set
+        {
+            _detail = value;
+            if (value.StartsWith("Setting up", StringComparison.Ordinal) || value.EndsWith('…')) IsIndeterminate = true;
+            OnPropertyChanged();
+        }
+    }
 }

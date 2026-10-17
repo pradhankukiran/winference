@@ -141,4 +141,54 @@ public sealed class MediaAddonItem : INotifyPropertyChanged
             OnPropertyChanged();
         }
     }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public Task ActAsync() => _owner.ActAsync(this);
+
+    internal void Update(bool installed, bool active)
+    {
+        IsInstalled = installed;
+        IsActive = active;
+        OnPropertyChanged(nameof(IsInstalled));
+        OnPropertyChanged(nameof(IsActive));
+        OnPropertyChanged(nameof(Meta));
+        OnPropertyChanged(nameof(ActionLabel));
+        OnPropertyChanged(nameof(ActionName));
+    }
+
+    internal void Begin(CancellationTokenSource cancellation, string detail)
+    {
+        Cancellation = cancellation;
+        Progress = 0;
+        Detail = detail;
+        RaiseBusy();
+    }
+
+    internal void End()
+    {
+        Cancellation = null;
+        Detail = string.Empty;
+        IsIndeterminate = false;
+        RaiseBusy();
+    }
+
+    internal void ReportProgress(MediaDownloadProgress update)
+    {
+        if (update.BytesTotal <= 0) return;
+        IsIndeterminate = false;
+        Progress = update.Fraction * 100;
+        _detail = $"Downloading… {update.BytesDone / 1048576.0:0} of {update.BytesTotal / 1048576.0:0} MB";
+        OnPropertyChanged(nameof(Detail));
+    }
+
+    private void RaiseBusy()
+    {
+        OnPropertyChanged(nameof(IsBusy));
+        OnPropertyChanged(nameof(BusyVisibility));
+        OnPropertyChanged(nameof(ActionLabel));
+        OnPropertyChanged(nameof(ActionName));
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }

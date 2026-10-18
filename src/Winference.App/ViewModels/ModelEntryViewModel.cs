@@ -68,4 +68,76 @@ public sealed class ModelEntryViewModel : INotifyPropertyChanged
         ModelStatus.Failed => Entry.NeedsRepair ? ModelAction.Repair : Entry.IsOnThisPc ? ModelAction.Use : ModelAction.Get,
         _ => ModelAction.None
     };
+
+    public string ActionLabel => Action switch
+    {
+        ModelAction.Get => "Get",
+        ModelAction.Use => _status == ModelStatus.Failed ? "Retry" : "Use",
+        ModelAction.Cancel => "Cancel",
+        ModelAction.Repair => "Find file",
+        _ => string.Empty
+    };
+
+    public bool CanAct => _canAct && Action != ModelAction.None;
+    public Visibility ActionVisibility => Visible(Action != ModelAction.None);
+    public Visibility ProgressVisibility => Visible(IsDownloading);
+    public bool IsProgressIndeterminate => _percent is null;
+    public double ProgressValue => _percent ?? 0;
+    public Visibility RemoveVisibility => Visible(CanRemove);
+    public string ActionAutomationName => $"{ActionLabel} {Name} on {Badge}";
+    public string DetailsAutomationName => $"Details for {Name} on {Badge}";
+    public string RemoveAutomationName => $"Remove {Name} on {Badge}";
+
+    public string DetailsText => string.Join(Environment.NewLine, new[]
+    {
+        $"Runs on {Badge}",
+        Entry.Profile.Artifact.FormatLabel + " · " + Entry.Profile.Artifact.Quantization,
+        Entry.Profile.Compatibility.Label,
+        Entry.Profile.InstalledPath,
+        Entry.Profile.Evidence
+    }.Where(line => !string.IsNullOrWhiteSpace(line)));
+
+    internal void Update(ModelCatalogEntry entry, GpuModelRegistration? gpu, HybridModelRegistration? hybrid,
+        SetupModel? npu, GpuCatalogModel? download, bool canRemove)
+    {
+        Entry = entry;
+        Gpu = gpu;
+        Hybrid = hybrid;
+        Npu = npu;
+        Download = download;
+        CanRemove = canRemove;
+        PropertyChanged?.Invoke(this, new(string.Empty));
+    }
+
+    internal void SetStatus(ModelStatus status, bool canAct, string? failure = null)
+    {
+        if (_status == status && _canAct == canAct && _failure == failure) return;
+        _status = status;
+        _canAct = canAct;
+        _failure = failure;
+        PropertyChanged?.Invoke(this, new(string.Empty));
+    }
+
+    internal void SetRecommended(bool recommended)
+    {
+        IsRecommended = recommended;
+        PropertyChanged?.Invoke(this, new(nameof(StatusLine)));
+        PropertyChanged?.Invoke(this, new(nameof(Subtitle)));
+    }
+
+    internal void ReportDownload(string message, double? percent)
+    {
+        _downloadMessage = percent is { } value ? $"{message} {value:0}%" : message;
+        _percent = percent;
+        PropertyChanged?.Invoke(this, new(nameof(StatusLine)));
+        PropertyChanged?.Invoke(this, new(nameof(Subtitle)));
+        PropertyChanged?.Invoke(this, new(nameof(IsProgressIndeterminate)));
+        PropertyChanged?.Invoke(this, new(nameof(ProgressValue)));
+    }
+
+    private static string Size(long? bytes) => bytes is > 0 ? StorageCheck.Format(bytes.Value) : "Size unavailable";
+    private static Visibility Visible(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
+
+    // ListViewItem exposes the item's ToString() as its automation name.
+    public override string ToString() => $"{Name} · {Badge} · {StatusLine}";
 }

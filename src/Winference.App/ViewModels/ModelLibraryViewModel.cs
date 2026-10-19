@@ -358,4 +358,102 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
         }
         else if (completed && _entries.GetValueOrDefault(entry.Key) is { } finished) Finish(finished);
     }
+
+    /// <summary>Starts the model if nothing is loaded. Otherwise it asks, without interrupting the chat.</summary>
+    private void Finish(ModelEntryViewModel entry)
+    {
+        if (_shell.Chat is { CanLoadModel: true, IsShutDown: false }) Offer(entry);
+        else _dispatcher.TryEnqueue(() => _ = UseAsync(entry));
+    }
+
+    private void Offer(ModelEntryViewModel entry)
+    {
+        _offered = entry;
+        _shell.OfferModel(entry.Name);
+    }
+
+    public void ClearOffer()
+    {
+        _offered = null;
+        _shell.ClearOffer();
+    }
+
+    public Task UseOfferedAsync() => _offered is { } entry ? UseAsync(entry) : Task.CompletedTask;
+
+    public void CancelDownload()
+    {
+        if (_downloading is { } entry) ReportDownload(entry, "Cancelling…", null);
+        _downloadCancellation?.Cancel();
+    }
+
+    private void ReportDownload(ModelEntryViewModel entry, string message, double? percent)
+    {
+        if (_lifetime.IsClosing || !ReferenceEquals(entry, _downloading)) return;
+        entry.ReportDownload(message, percent);
+        _shell.ReportDownloadActivity($"{entry.Name}: {entry.StatusLine}", percent);
+        DownloadChanged();
+    }
+
+    private void DownloadChanged()
+    {
+        foreach (var name in new[] { nameof(DownloadStatus), nameof(IsDownloading), nameof(IsDownloadIndeterminate), nameof(DownloadValue) }) Changed(name);
+    }
+
+    private static string DownloadLabel(string stage) => stage switch
+    {
+        "DownloadingRuntime" or "InstallingRuntime" or "VerifyingRuntime" => "Getting the NPU component…",
+        "DownloadingModel" => "Downloading…",
+        "CheckingFiles" => "Verifying…",
+        _ => "Preparing…"
+    };
+
+    private long? FreeBytes()
+    {
+        if (TestHardware.FreeBytesOverride() is { } simulated) return simulated;
+        try { return new DriveInfo(Path.GetPathRoot(Path.GetFullPath(_dataRoot))!).AvailableFreeSpace; }
+        catch (Exception error) when (error is ArgumentException or IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>One button for any model on disk. The file chosen decides which runtime it belongs to.</summary>
+    public async Task AddAsync()
+    {
+        if (_session.IsChanging) return;
+        await _session.RunAsync(AddCoreAsync);
+    }
+
+    private async Task AddCoreAsync()
+    {
+        try
+        {
+            var path = await _pickModelFile();
+            if (path is null || _lifetime.IsClosing) return;
+            Error = null;
+            string? key;
+            var progress = new Progress<SetupProgress>(value => { if (!_lifetime.IsClosing) _shell.ReportModelActivity(value.Message); });
+            if (path.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+            {
+                _shell.ReportModelActivity("Reading and verifying the model file…");
+                key = (await _gpuModels.RegisterAsync(path, progress, _lifetime.Token)).Profile.ProfileId;
+            }
+            else if (string.Equals(Path.GetFileName(path), "genai_config.json", StringComparison.OrdinalIgnoreCase))
+            {
+                _shell.ReportModelActivity("Reading and verifying the model folder…");
+                key = (await _hybridModels.RegisterAsync(Path.GetDirectoryName(path)!, progress, _lifetime.Token)).Profile.ProfileId;
+            }
+            else
+            {
+                ReportFailure("Choose a .gguf model file, or the genai_config.json file inside a Ryzen AI model folder.");
+                return;
+            }
+            await RefreshAsync();
+            if (!_lifetime.IsClosing && _entries.GetValueOrDefault(key) is { } added) Finish(added);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsClosing) { }
+        catch (Exception error)
+        {
+            if (!_lifetime.IsClosing) ReportFailure(error is RuntimeException runtime ? runtime.Message
+                : "That model could not be added. Check the file and folder access, then try again. Existing files were kept.");
+        }
+        finally { _shell.ClearModelActivity(); }
+    }
 }

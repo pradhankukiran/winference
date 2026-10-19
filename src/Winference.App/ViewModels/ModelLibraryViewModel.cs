@@ -171,4 +171,86 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             ApplyView();
         }
     }
+
+    private void Rebuild(IReadOnlyList<ModelCatalogEntry> entries, IReadOnlyList<GpuModelRegistration> gpu,
+        IReadOnlyList<HybridModelRegistration> hybrid, IReadOnlyList<SetupModel> npu)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in entries)
+        {
+            var profile = entry.Profile;
+            seen.Add(profile.ProfileId);
+            var gpuModel = gpu.FirstOrDefault(model => model.Profile.ProfileId == profile.ProfileId);
+            var hybridModel = hybrid.FirstOrDefault(model => model.Profile.ProfileId == profile.ProfileId);
+            var npuModel = profile.Artifact.Id.StartsWith("flm:", StringComparison.Ordinal)
+                ? npu.FirstOrDefault(model => profile.Artifact.Id == "flm:" + model.Id) : null;
+            var download = _library.GpuCatalog.Models.FirstOrDefault(model => model.Sha256 == profile.Artifact.Sha256);
+            var canRemove = _library.CanRemove(profile);
+            if (_entries.TryGetValue(profile.ProfileId, out var existing)) existing.Update(entry, gpuModel, hybridModel, npuModel, download, canRemove);
+            else _entries[profile.ProfileId] = new(entry, gpuModel, hybridModel, npuModel, download, canRemove);
+        }
+        foreach (var stale in _entries.Keys.Where(key => !seen.Contains(key)).ToArray())
+            if (!ReferenceEquals(_entries[stale], _downloading)) _entries.Remove(stale);
+        _recommended?.SetRecommended(false);
+        _recommended = ModelRecommender.Pick(entries, _inspection?.MemoryBytes ?? 0) is { } picked
+            ? _entries.GetValueOrDefault(picked.Profile.ProfileId) : null;
+        _recommended?.SetRecommended(true);
+    }
+
+    private void ApplyView()
+    {
+        UpdateStatuses();
+        var visible = ModelCatalogView.Apply(_entries.Values.Select(entry => entry.Entry), _filter, _query)
+            .Select(entry => _entries[entry.Profile.ProfileId]).ToArray();
+        Sync(OnThisPc, visible.Where(entry => entry.Entry.IsOnThisPc));
+        Sync(Available, visible.Where(entry => !entry.Entry.IsOnThisPc).OrderByDescending(entry => entry.IsRecommended));
+        foreach (var name in new[] { nameof(HasOnThisPc), nameof(HasAvailable), nameof(IsEmpty), nameof(IsChecking), nameof(EmptyMessage),
+            nameof(RecommendedName), nameof(RecommendedDetail), nameof(RecommendedAction), nameof(HasRecommendation),
+            nameof(IsUnsupported), nameof(HardwareProblem) }) Changed(name);
+    }
+
+    private static void Sync(ObservableCollection<ModelEntryViewModel> target, IEnumerable<ModelEntryViewModel> items)
+    {
+        var wanted = items.ToArray();
+        if (target.SequenceEqual(wanted)) return;
+        target.Clear();
+        foreach (var item in wanted) target.Add(item);
+    }
+
+    private void Shell_PropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName is nameof(ShellViewModel.Chat) or nameof(ShellViewModel.FriendlyStatus) or nameof(ShellViewModel.HasModelActivity))
+            UpdateStatuses();
+    }
+
+    private void UpdateStatuses()
+    {
+        var chat = _shell.Chat;
+        var activeId = chat is { CanLoadModel: true } ? _shell.ActiveModelId : null;
+        var busy = _shell.HasModelActivity;
+        foreach (var entry in _entries.Values)
+        {
+            var selected = activeId is not null && entry.RuntimeModelId == activeId;
+            var failure = selected && chat?.HasErrorNotice == true ? chat.ConnectionDetail : null;
+            var status = ModelStatusRules.Resolve(entry.Entry.Profile.Compatibility.IsInstalled, entry.Entry.NeedsRepair,
+                ReferenceEquals(entry, _downloading), failure is not null, selected,
+                chat?.IsConnecting == true || busy, chat?.ActiveSession is not null);
+            entry.SetStatus(status, CanAct(status), failure);
+        }
+    }
+
+    private bool CanAct(ModelStatus status) => status == ModelStatus.Downloading ||
+        !_shell.HasModelActivity && (status is ModelStatus.Ready or ModelStatus.Failed || _downloading is null);
+
+    /// <summary>Carries out the row's main button.</summary>
+    public async Task PerformAsync(ModelEntryViewModel entry)
+    {
+        switch (entry.Action)
+        {
+            case ModelAction.Get: await GetAsync(entry, confirm: true); break;
+            case ModelAction.Use: await UseAsync(entry); break;
+            case ModelAction.Cancel: CancelDownload(); break;
+            case ModelAction.Repair: await AddAsync(); break;
+        }
+    }
 }

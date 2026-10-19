@@ -253,4 +253,109 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             case ModelAction.Repair: await AddAsync(); break;
         }
     }
+
+    /// <summary>First run's one button. The size is already on it, so it skips the extra question.</summary>
+    public async Task ActOnRecommendationAsync()
+    {
+        if (_recommended is not { } entry) return;
+        if (entry.Entry.IsOnThisPc) await UseAsync(entry);
+        else await GetAsync(entry, confirm: false);
+    }
+
+    private async Task UseAsync(ModelEntryViewModel entry)
+    {
+        Error = null;
+        ClearOffer();
+        if (entry.Gpu is { } gpu) await _session.UseGpuAsync(gpu);
+        else if (entry.Hybrid is { } hybrid) await _session.UseHybridAsync(hybrid);
+        else if (entry.Npu is { } npu)
+        {
+            // Files can be present while the runtime is not; Get fetches only what is missing.
+            if (_inspection?.RuntimeInstalled == false) await GetAsync(entry, confirm: true);
+            else await _session.UseNpuAsync(npu);
+        }
+    }
+
+    private long ComponentBytes(ModelEntryViewModel entry) => entry.Npu is not null
+        ? _inspection?.RuntimeInstalled == false ? _inspection.RuntimeDownloadBytes ?? 0 : 0
+        : _gpuStatus is { IsInstalled: false } status ? status.DownloadBytes : 0;
+
+    private async Task GetAsync(ModelEntryViewModel entry, bool confirm)
+    {
+        if (_downloading is not null) return;
+        Error = null;
+        var modelBytes = entry.Entry.Profile.DownloadBytes ?? 0;
+        var componentBytes = ComponentBytes(entry);
+        var needed = modelBytes + componentBytes;
+        if (FreeBytes() is { } free && !StorageCheck.HasRoom(needed, free))
+        {
+            await _dialogs.InformAsync("Not enough storage",
+            [
+                $"{entry.Name} needs {StorageCheck.Format(needed + StorageCheck.HeadroomBytes)} free, and this drive has {StorageCheck.Format(free)}.",
+                "Free up some space, then try again."
+            ]);
+            return;
+        }
+        if (confirm)
+        {
+            var lines = new List<string> { $"{StorageCheck.Format(needed)} download · Runs on {entry.Badge}" };
+            if (componentBytes > 0) lines.Add($"Includes the {StorageCheck.Format(componentBytes)} component this model needs.");
+            lines.Add("You can keep chatting while it downloads.");
+            var terms = entry.Download is { } source ? ("Model source and terms", source.SourcePage) : ((string, Uri)?)null;
+            if (!await _dialogs.ConfirmAsync($"Get {entry.Name}?", lines.ToArray(), "Get", primaryIsDefault: true, link: terms)) return;
+        }
+        _download = RunDownloadAsync(entry);
+        await _download;
+    }
+
+    private async Task RunDownloadAsync(ModelEntryViewModel entry)
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _downloadCancellation = cancellation;
+        _downloading = entry;
+        ReportDownload(entry, "Preparing…", null);
+        UpdateStatuses();
+        DownloadChanged();
+        string? failure = null;
+        var completed = false;
+        try
+        {
+            if (entry.Npu is { } npu)
+            {
+                await _downloader.DownloadAsync(new(npu.Id, ExecutionMode.NpuOnly, _inspection!.DefaultModelStore, npu.SuggestedContextLength),
+                    new Progress<SetupProgress>(value => ReportDownload(entry, DownloadLabel(value.Stage), value.Percent)), cancellation.Token);
+            }
+            else if (entry.Download is { } gpu)
+            {
+                await _library.DownloadGpuAsync(gpu, new Progress<DownloadProgress>(value =>
+                    ReportDownload(entry, value.State == DownloadState.Verifying ? "Verifying…" : "Downloading…", value.Percent)), cancellation.Token);
+                if (_gpuStatus is { IsInstalled: false })
+                    await _gpuRuntime.AcquireAsync(new Progress<SetupProgress>(value =>
+                        ReportDownload(entry, "Getting the GPU component…", value.Percent)), cancellation.Token);
+            }
+            completed = true;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            AppDiagnostics.WriteException("model.download.failed", error);
+            failure = error is RuntimeException runtime ? runtime.Message
+                : "The download did not finish. Downloaded parts were kept, so Get can pick up where it stopped.";
+        }
+        finally
+        {
+            _downloadCancellation = null;
+            _downloading = null;
+            _shell.ClearDownloadActivity();
+        }
+        if (_lifetime.IsClosing) return;
+        DownloadChanged();
+        await RefreshAsync();
+        if (failure is not null)
+        {
+            Error = failure;
+            _shell.ReportShellError(failure);
+        }
+        else if (completed && _entries.GetValueOrDefault(entry.Key) is { } finished) Finish(finished);
+    }
 }

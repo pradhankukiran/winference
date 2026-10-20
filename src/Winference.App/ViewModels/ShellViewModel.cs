@@ -99,4 +99,67 @@ public sealed class ShellViewModel : INotifyPropertyChanged
         if (args.PropertyName is nameof(ChatViewModel.ConnectionDetail)) OnPropertyChanged(nameof(ConnectionDetail));
         if (args.PropertyName is nameof(ChatViewModel.CanSend)) OnPropertyChanged(nameof(CanSend));
     }
+
+    public string DraftMessage
+    {
+        get => _draftMessage;
+        set
+        {
+            value ??= string.Empty;
+            if (_draftMessage == value) return;
+            _draftMessage = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasDraft));
+        }
+    }
+
+    public string? ShellError
+    {
+        get => _shellError;
+        private set
+        {
+            if (_shellError == value) return;
+            _shellError = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(HasShellError));
+        }
+    }
+
+    public bool HasShellError => !string.IsNullOrEmpty(ShellError);
+
+    public void ReportShellError(string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        ShellError = message;
+    }
+
+    public void DismissShellError() => ShellError = null;
+
+    /// <summary>Model loads take priority over a background download in the title bar.</summary>
+    public string ActivityMessage => _modelActivity ?? _downloadActivity ?? string.Empty;
+    public bool HasActivity => _modelActivity is not null || _downloadActivity is not null;
+    public bool HasModelActivity => _modelActivity is not null;
+    public bool IsActivityIndeterminate => _modelActivity is not null || _downloadPercent is null;
+    public double ActivityValue => _modelActivity is null ? _downloadPercent ?? 0 : 0;
+
+    public void ReportModelActivity(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message) || _modelActivity == message) return;
+        _modelActivity = message;
+        ActivityChanged();
+    }
+
+    public void ClearModelActivity()
+    {
+        if (_modelActivity is null) return;
+        _modelActivity = null;
+        ActivityChanged();
+    }
+
+    public void ReportDownloadActivity(string message, double? percent)
+    {
+        _downloadActivity = message;
+        _downloadPercent = percent;
+        ActivityChanged();
+    }
 }

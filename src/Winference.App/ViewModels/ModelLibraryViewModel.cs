@@ -456,4 +456,55 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
         }
         finally { _shell.ClearModelActivity(); }
     }
+
+    private void ReportFailure(string message)
+    {
+        Error = message;
+        _shell.ReportShellError(message);
+    }
+
+    public async Task RemoveAsync(ModelEntryViewModel entry)
+    {
+        if (_downloading is not null) return;
+        await _session.RunAsync(() => RemoveCoreAsync(entry));
+    }
+
+    private async Task RemoveCoreAsync(ModelEntryViewModel entry)
+    {
+        try
+        {
+            Error = null;
+            var plan = await _library.PlanRemovalAsync(entry.Entry.Profile, _lifetime.Token);
+            if (_lifetime.IsClosing) return;
+            if (!await _dialogs.ConfirmAsync($"Remove {entry.Name}?",
+                [
+                    $"This frees {StorageCheck.Format(plan.TotalBytes)}. You can get the model again later.",
+                    "If it's loaded, it will stop. Your chats are kept."
+                ], "Remove")) return;
+            _shell.ReportModelActivity($"Removing {entry.Name}…");
+            await _session.ReleaseAsync(plan.ModelId);
+            var result = await _library.RemoveAsync(plan, _lifetime.Token);
+            if (_lifetime.IsClosing) return;
+            await RefreshAsync();
+            if (result.CleanupPending)
+                _shell.ReportShellError($"{entry.Name} was removed, but some files could not be deleted and were kept at {result.RecoveryDirectory}.");
+        }
+        catch (OperationCanceledException) when (_lifetime.IsClosing) { }
+        catch (Exception error)
+        {
+            if (!_lifetime.IsClosing) ReportFailure(error is RuntimeException runtime ? runtime.Message
+                : "The model files could not be removed. Check folder access and retry. Your chats were kept.");
+        }
+        finally { _shell.ClearModelActivity(); }
+    }
+
+    private static string FilterLabel(ModelFilter filter) => filter switch
+    {
+        ModelFilter.Npu => "NPU",
+        ModelFilter.GpuNpu => "GPU + NPU",
+        ModelFilter.Gpu => "GPU",
+        _ => string.Empty
+    };
+
+    private void Changed([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new(name));
 }

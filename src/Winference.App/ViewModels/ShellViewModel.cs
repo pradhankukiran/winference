@@ -54,4 +54,49 @@ public sealed class ShellViewModel : INotifyPropertyChanged
         { IsReady: true } => "Ready",
         _ => "Not loaded"
     };
+
+    public bool HasDraft => _draftMessage.Length > 0;
+    public ExecutionMode SelectedMode => _profile?.ExecutionMode ?? ExecutionMode.NpuOnly;
+
+    public void SelectModel(SetupModel model, ModelProfile profile)
+    {
+        _selectedModel = model;
+        _profile = profile;
+        foreach (var name in new[] { nameof(ModelName), nameof(ModelPublisher), nameof(ContextLength), nameof(ContextLabel),
+            nameof(SelectedMode), nameof(HardwareBadgeLabel) })
+            OnPropertyChanged(name);
+    }
+
+    public void AttachChat(ChatViewModel chat)
+    {
+        ArgumentNullException.ThrowIfNull(chat);
+        if (ReferenceEquals(_chat, chat)) return;
+        if (_chat is not null) _chat.PropertyChanged -= Chat_PropertyChanged;
+        _chat = chat;
+        _chat.PropertyChanged += Chat_PropertyChanged;
+        OnPropertyChanged(nameof(Chat));
+        OnPropertyChanged(nameof(ModelStatus));
+        OnPropertyChanged(nameof(ConnectionStatus));
+        OnPropertyChanged(nameof(ConnectionLabel));
+        OnPropertyChanged(nameof(ConnectionDetail));
+        OnPropertyChanged(nameof(CanSend));
+        OnPropertyChanged(nameof(ActiveMode));
+        OnPropertyChanged(nameof(HardwareBadgeLabel));
+        OnPropertyChanged(nameof(FriendlyStatus));
+    }
+
+    private void Chat_PropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName is nameof(ChatViewModel.ModelStatus)) OnPropertyChanged(nameof(ModelStatus));
+        if (args.PropertyName is nameof(ChatViewModel.ConnectionStatus))
+        {
+            OnPropertyChanged(nameof(ConnectionStatus));
+            OnPropertyChanged(nameof(ConnectionLabel));
+            OnPropertyChanged(nameof(ActiveMode));
+            OnPropertyChanged(nameof(HardwareBadgeLabel));
+            OnPropertyChanged(nameof(FriendlyStatus));
+        }
+        if (args.PropertyName is nameof(ChatViewModel.ConnectionDetail)) OnPropertyChanged(nameof(ConnectionDetail));
+        if (args.PropertyName is nameof(ChatViewModel.CanSend)) OnPropertyChanged(nameof(CanSend));
+    }
 }

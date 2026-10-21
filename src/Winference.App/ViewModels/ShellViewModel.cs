@@ -162,4 +162,37 @@ public sealed class ShellViewModel : INotifyPropertyChanged
         _downloadPercent = percent;
         ActivityChanged();
     }
+
+    public void ClearDownloadActivity()
+    {
+        _downloadActivity = null;
+        _downloadPercent = null;
+        ActivityChanged();
+    }
+
+    private void ActivityChanged()
+    {
+        foreach (var name in new[] { nameof(ActivityMessage), nameof(HasActivity), nameof(HasModelActivity),
+            nameof(IsActivityIndeterminate), nameof(ActivityValue) }) OnPropertyChanged(name);
+    }
+
+    public string OfferMessage => _offeredModel is null ? string.Empty : $"{_offeredModel} is ready.";
+    public bool HasOffer => _offeredModel is not null;
+
+    public void OfferModel(string name)
+    {
+        _offeredModel = name;
+        OnPropertyChanged(nameof(OfferMessage));
+        OnPropertyChanged(nameof(HasOffer));
+    }
+
+    public void ClearOffer()
+    {
+        _offeredModel = null;
+        OnPropertyChanged(nameof(OfferMessage));
+        OnPropertyChanged(nameof(HasOffer));
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }

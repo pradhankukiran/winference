@@ -145,4 +145,71 @@ public sealed partial class ChatPage : Page
         chat.RetryCommand.Execute(null);
         Announce("Writing a new reply…");
     }
+
+    private async void ReadAloud_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: ChatMessageViewModel message }) return;
+        var error = await _readAloud.ToggleAsync(message);
+        Announce(error ?? (message.IsSpeaking ? "Reading aloud." : "Stopped reading."));
+    }
+
+    private Windows.Media.Capture.MediaCapture? _capture;
+    private Windows.Storage.Streams.InMemoryRandomAccessStream? _recording;
+    private DispatcherQueueTimer? _recordingLimit;
+    private bool _transcribing;
+
+    private void Image_Click(object sender, RoutedEventArgs args)
+    {
+        if (_chat is not { CanStartImage: true } chat) return;
+        if (!chat.DraftMessage.StartsWith(ChatViewModel.ImageCommand.TrimEnd(), StringComparison.OrdinalIgnoreCase))
+            chat.DraftMessage = ChatViewModel.ImageCommand + chat.DraftMessage.TrimStart();
+        Composer.Focus(FocusState.Programmatic);
+        Composer.SelectionStart = Composer.Text.Length;
+        Announce("Describe the picture, then send.");
+    }
+
+    /// <summary>First click records from the microphone; the second stops and adds the words to the draft.</summary>
+    private async void Mic_Click(object sender, RoutedEventArgs args)
+    {
+        if (_transcribing || _chat is not { CanDictate: true } chat) return;
+        if (_capture is null) await StartRecordingAsync();
+        else await StopRecordingAsync(chat);
+    }
+
+    private async Task StartRecordingAsync()
+    {
+        _readAloud.Stop();
+        try
+        {
+            _capture = new Windows.Media.Capture.MediaCapture();
+            await _capture.InitializeAsync(new Windows.Media.Capture.MediaCaptureInitializationSettings
+            {
+                StreamingCaptureMode = Windows.Media.Capture.StreamingCaptureMode.Audio,
+                MediaCategory = Windows.Media.Capture.MediaCategory.Speech
+            });
+            var profile = Windows.Media.MediaProperties.MediaEncodingProfile.CreateWav(Windows.Media.MediaProperties.AudioEncodingQuality.Low);
+            profile.Audio = Windows.Media.MediaProperties.AudioEncodingProperties.CreatePcm(16000, 1, 16);
+            _recording = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            await _capture.StartRecordToStreamAsync(profile, _recording);
+            MicGlyph.Glyph = "\uE71A";
+            AutomationProperties.SetName(MicButton, "Stop recording");
+            ToolTipService.SetToolTip(MicButton, "Stop recording");
+            _recordingLimit ??= DispatcherQueue.CreateTimer();
+            _recordingLimit.Interval = TimeSpan.FromMinutes(2);
+            _recordingLimit.IsRepeating = false;
+            _recordingLimit.Tick += RecordingLimit_Tick;
+            _recordingLimit.Start();
+            Announce("Listening… click the microphone again when you're done.");
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException || error.HResult == unchecked((int)0x80070005))
+        {
+            ResetRecording();
+            await ShowProblemAsync("Microphone not available", ("Winference isn't allowed to use the microphone. In Windows Settings > Privacy & security > Microphone, turn on \"Let desktop apps access your microphone\"."));
+        }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException)
+        {
+            ResetRecording();
+            await ShowProblemAsync("Microphone not available", "No microphone was found, or another app is using it.");
+        }
+    }
 }

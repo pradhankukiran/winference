@@ -212,4 +212,92 @@ public sealed partial class ChatPage : Page
             await ShowProblemAsync("Microphone not available", "No microphone was found, or another app is using it.");
         }
     }
+
+    private async void RecordingLimit_Tick(DispatcherQueueTimer sender, object args)
+    {
+        sender.Tick -= RecordingLimit_Tick;
+        if (_capture is not null && _chat is { } chat) await StopRecordingAsync(chat);
+    }
+
+    private async Task StopRecordingAsync(ChatViewModel chat)
+    {
+        if (_recordingLimit is { } limit) { limit.Stop(); limit.Tick -= RecordingLimit_Tick; }
+        var capture = _capture;
+        var recording = _recording;
+        _capture = null;
+        _recording = null;
+        if (capture is null || recording is null) { ResetRecording(); return; }
+        _transcribing = true;
+        MicGlyph.Glyph = "\uE916";
+        Announce("Turning your speech into text…");
+        try
+        {
+            await capture.StopRecordAsync();
+            var bytes = new byte[recording.Size];
+            recording.Seek(0);
+            using (var reader = new Windows.Storage.Streams.DataReader(recording))
+            {
+                await reader.LoadAsync((uint)recording.Size);
+                reader.ReadBytes(bytes);
+            }
+            if (bytes.Length < 16000) { Announce("That recording was too short."); return; }
+            var text = await chat.TranscribeAsync(bytes, CancellationToken.None);
+            if (text.Length == 0 || text.Trim('.', ' ').Equals("[BLANK_AUDIO]", StringComparison.OrdinalIgnoreCase))
+            {
+                Announce("No speech was heard. Check your microphone and try again.");
+                return;
+            }
+            var draft = chat.DraftMessage;
+            chat.DraftMessage = draft.Length == 0 ? text : draft.TrimEnd() + " " + text;
+            Composer.Focus(FocusState.Programmatic);
+            Composer.SelectionStart = Composer.Text.Length;
+            Announce("Added what you said. Edit it or press Enter to send.");
+        }
+        catch (Winference.Core.Runtime.RuntimeException error) { await ShowProblemAsync("Speech wasn't turned into text", error.Message); }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException)
+        {
+            await ShowProblemAsync("Speech wasn't turned into text", "The recording couldn't be finished. Try again.");
+        }
+        finally
+        {
+            _transcribing = false;
+            capture.Dispose();
+            recording.Dispose();
+            ResetRecording();
+        }
+    }
+
+    private void ResetRecording()
+    {
+        _capture?.Dispose();
+        _capture = null;
+        _recording?.Dispose();
+        _recording = null;
+        MicGlyph.Glyph = "\uE720";
+        AutomationProperties.SetName(MicButton, "Speak a message");
+        ToolTipService.SetToolTip(MicButton, "Speak a message (click again to stop)");
+    }
+
+    private async void Attach_Click(object sender, RoutedEventArgs args)
+    {
+        if (_chat is not { CanAttach: true } chat) return;
+        try
+        {
+            var picker = new Windows.Storage.Pickers.FileOpenPicker
+            {
+                SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary,
+                ViewMode = Windows.Storage.Pickers.PickerViewMode.List
+            };
+            foreach (var extension in WindowsDocumentReader.SupportedExtensions) picker.FileTypeFilter.Add(extension);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker,
+                Microsoft.UI.Win32Interop.GetWindowFromWindowId(XamlRoot.ContentIslandEnvironment.AppWindowId));
+            var files = await picker.PickMultipleFilesAsync();
+            await AttachFilesAsync(chat, files.Select(file => file.Path));
+        }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException or UnauthorizedAccessException)
+        {
+            Announce("The file picker couldn't open. Try dropping the file onto the message box instead.");
+        }
+        Composer.Focus(FocusState.Programmatic);
+    }
 }

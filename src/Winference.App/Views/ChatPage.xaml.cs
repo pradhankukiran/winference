@@ -378,4 +378,70 @@ public sealed partial class ChatPage : Page
         try { await dialog.ShowAsync(); }
         catch (Exception error) when (error is System.Runtime.InteropServices.COMException) { Announce(problem); }
     }
+
+    private void RemovePendingImage_Click(object sender, RoutedEventArgs args)
+    {
+        _chat?.RemovePendingImage();
+        Announce("Picture removed.");
+        Composer.Focus(FocusState.Programmatic);
+    }
+
+    private void RemoveAttachment_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: AttachmentItem item } || _chat is null) return;
+        _chat.RemoveAttachment(item.Id);
+        Announce($"Removed {item.FileName}.");
+        Composer.Focus(FocusState.Programmatic);
+    }
+    private void ModelFlyout_Opening(object sender, object args) => _ = _library.RefreshAsync();
+
+    private void Page_Loaded(object sender, RoutedEventArgs args)
+    {
+        Subscribe();
+        UpdateConversationLayout(scrollToEnd: false);
+        UpdateRuntimeActions();
+        UpdateLatestAction();
+        Composer.Focus(FocusState.Programmatic);
+    }
+
+    private void Page_Unloaded(object sender, RoutedEventArgs args)
+    {
+        _readAloud.Stop();
+        if (_capture is not null) { _recordingLimit?.Stop(); ResetRecording(); }
+        _scrollTimer.Stop();
+        _announcementTimer.Stop();
+        _isComposing = false;
+        _suppressEnterUntilRelease = false;
+        _keyboardFocusMove = false;
+        PageScroll.BringIntoViewOnFocusChange = true;
+        if (!_subscribed) return;
+        _subscribed = false;
+        if (_chat is null) return;
+        _chat.PropertyChanged -= Chat_PropertyChanged;
+        _chat.Messages.CollectionChanged -= Messages_CollectionChanged;
+        foreach (var message in _messageSubscriptions) message.PropertyChanged -= Message_PropertyChanged;
+        _messageSubscriptions.Clear();
+    }
+
+    private void TranscriptViewport_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        // Only the transcript scrolls. Header and composer are finite grid rows.
+        TranscriptCanvas.MinHeight = Math.Max(0, args.NewSize.Height);
+    }
+
+    private void CopyMessage_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is not FrameworkElement { DataContext: ChatMessageViewModel message }) return;
+        try
+        {
+            var content = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            content.SetText(message.DisplayText);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(content);
+            Announce("Message copied.");
+        }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException or UnauthorizedAccessException)
+        {
+            Announce("The message could not be copied. Select its text and try again.");
+        }
+    }
 }

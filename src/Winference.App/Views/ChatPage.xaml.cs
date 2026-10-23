@@ -300,4 +300,82 @@ public sealed partial class ChatPage : Page
         }
         Composer.Focus(FocusState.Programmatic);
     }
+
+    private void Composer_DragOver(object sender, DragEventArgs args)
+    {
+        if (_chat is { CanAttach: true } && args.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+        {
+            args.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy;
+            args.DragUIOverride.Caption = "Attach to this chat";
+        }
+        else args.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
+    }
+
+    private async void Composer_Drop(object sender, DragEventArgs args)
+    {
+        if (_chat is not { CanAttach: true } chat ||
+            !args.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems)) return;
+        var deferral = args.GetDeferral();
+        try
+        {
+            var items = await args.DataView.GetStorageItemsAsync();
+            deferral.Complete();
+            deferral = null;
+            await AttachFilesAsync(chat, items.OfType<Windows.Storage.StorageFile>().Select(file => file.Path));
+        }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException or UnauthorizedAccessException)
+        {
+            Announce("The dropped files couldn't be read.");
+        }
+        finally { deferral?.Complete(); }
+    }
+
+    private async Task AttachFilesAsync(ChatViewModel chat, IEnumerable<string> paths)
+    {
+        var problems = new List<string>();
+        var added = 0;
+        foreach (var path in paths.Where(path => !string.IsNullOrEmpty(path)))
+        {
+            if (!chat.CanAttach)
+            {
+                problems.Add($"A chat can have up to {Winference.Infrastructure.Chat.ConversationAttachmentStore.MaxAttachmentsPerChat} documents.");
+                break;
+            }
+            // A vision model sees the picture itself; other models get the text read from it.
+            if (chat.SupportsImages && ImagePreparation.IsImage(path))
+            {
+                if (await chat.AttachImageAsync(path) is { } imageProblem) problems.Add(imageProblem);
+                else Announce("Picture added. Ask about it and send.");
+                continue;
+            }
+            if (await chat.AttachAsync(path) is { } problem) problems.Add(problem);
+            else added++;
+        }
+        if (added > 0) Announce(added == 1 ? "Document attached. The model will use it when you send." : $"{added} documents attached.");
+        if (problems.Count > 0) await ShowAttachProblemsAsync(problems);
+    }
+
+    private async Task ShowAttachProblemsAsync(IReadOnlyList<string> problems)
+    {
+        var details = new StackPanel { Spacing = 8 };
+        foreach (var problem in problems.Distinct()) details.Children.Add(new TextBlock { Text = problem, TextWrapping = TextWrapping.Wrap });
+        var dialog = new ContentDialog
+        {
+            Title = problems.Count == 1 ? "This document couldn't be attached" : "Some documents couldn't be attached",
+            Content = details, CloseButtonText = "OK", DefaultButton = ContentDialogButton.Close, XamlRoot = XamlRoot
+        };
+        try { await dialog.ShowAsync(); }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException) { Announce(problems[0]); }
+    }
+
+    private async Task ShowProblemAsync(string title, string problem)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title, Content = new TextBlock { Text = problem, TextWrapping = TextWrapping.Wrap },
+            CloseButtonText = "OK", DefaultButton = ContentDialogButton.Close, XamlRoot = XamlRoot
+        };
+        try { await dialog.ShowAsync(); }
+        catch (Exception error) when (error is System.Runtime.InteropServices.COMException) { Announce(problem); }
+    }
 }

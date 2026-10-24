@@ -607,4 +607,82 @@ public sealed partial class ChatPage : Page
         _lastVerticalOffset = offset;
         UpdateLatestAction();
     }
+
+    private void QueueTranscriptScroll()
+    {
+        PageScroll.BringIntoViewOnFocusChange = _followLatest || _keyboardFocusMove;
+        if (!IsLoaded) return;
+        if (!_followLatest)
+        {
+            _hasUnseenOutput = true;
+            UpdateLatestAction();
+            return;
+        }
+        // Batch stream updates. A fast runtime must not enqueue a layout and
+        // scroll operation for every generated token.
+        if (!_scrollTimer.IsRunning) _scrollTimer.Start();
+    }
+
+    private void ScrollTimer_Tick(DispatcherQueueTimer sender, object args)
+    {
+        if (!IsLoaded || !_followLatest || Transcript.Visibility != Visibility.Visible) return;
+        PageScroll.UpdateLayout();
+        PageScroll.ChangeView(null, PageScroll.ScrollableHeight, null, true);
+        _hasUnseenOutput = false;
+        UpdateLatestAction();
+    }
+
+    private void UpdateLatestAction()
+    {
+        // Native focus recovery is separate from our stream-follow timer.
+        // Keep it from revealing the disabled composer while reading history.
+        PageScroll.BringIntoViewOnFocusChange = _followLatest || _keyboardFocusMove;
+        ReturnToLatestButton.Visibility = _hasUnseenOutput && !_followLatest ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ReturnToLatest_Click(object sender, RoutedEventArgs args)
+    {
+        _followLatest = true;
+        QueueTranscriptScroll();
+        Composer.Focus(FocusState.Programmatic);
+    }
+
+    private void RetryReply_Click(object sender, RoutedEventArgs args)
+    {
+        _followLatest = true;
+        QueueTranscriptScroll();
+    }
+
+    /// <summary>Short status text that also reaches screen readers, then clears itself.</summary>
+    private void Announce(string text)
+    {
+        _announcementTimer.Stop();
+        ResponseAnnouncement.Text = text;
+        if (text.Length > 0) _announcementTimer.Start();
+    }
+
+    private void ComposerAction_Click(object sender, RoutedEventArgs args)
+    {
+        if (_chat is null) return;
+        // Keep keyboard focus stable when Send becomes Stop. The composer
+        // stays focusable and read-only while a reply owns the submitted text.
+        Composer.Focus(FocusState.Programmatic);
+        if (_chat.ComposerStops)
+        {
+            _chat.StopCommand.Execute(null);
+            return;
+        }
+        if (!_chat.SendCommand.CanExecute(null)) return;
+        _followLatest = true;
+        QueueTranscriptScroll();
+        _chat.SendCommand.Execute(null);
+    }
+
+    private void NewChat_Click(object sender, RoutedEventArgs args)
+    {
+        _followLatest = true;
+        _hasUnseenOutput = false;
+        UpdateLatestAction();
+    }
+
 }

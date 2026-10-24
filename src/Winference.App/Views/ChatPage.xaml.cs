@@ -536,4 +536,75 @@ public sealed partial class ChatPage : Page
             _wasGenerating = _chat.IsGenerating;
         }
     }
+
+    private void Messages_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
+    {
+        if (args.Action == NotifyCollectionChangedAction.Reset) _readAloud.Stop();
+        // Clear() raises Reset without OldItems. Keep our own set so old
+        // conversations cannot retain this page through message events.
+        foreach (var message in _messageSubscriptions.Where(message => _chat?.Messages.Contains(message) != true).ToArray())
+        {
+            message.PropertyChanged -= Message_PropertyChanged;
+            _messageSubscriptions.Remove(message);
+        }
+        SubscribeMessages();
+        // New turns can arrive after asynchronous context counting. Respect a
+        // later user scroll instead of treating that delayed insertion as a
+        // fresh request to follow the latest output.
+        UpdateConversationLayout(scrollToEnd: true);
+    }
+
+    private void SubscribeMessages()
+    {
+        if (_chat is null) return;
+        foreach (var message in _chat.Messages)
+            if (_messageSubscriptions.Add(message)) message.PropertyChanged += Message_PropertyChanged;
+    }
+
+    private void Message_PropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(ChatMessageViewModel.Text) && IsLoaded)
+            QueueTranscriptScroll();
+    }
+
+    private void UpdateConversationLayout(bool scrollToEnd)
+    {
+        if (Transcript is null || EmptyStatePanel is null) return;
+        var hasConversation = _chat?.HasConversation == true;
+        var noModel = _chat?.CanLoadModel == false;
+        EmptyTitle.Text = noModel ? "Choose a model to start" : "What would you like to work on?";
+        EmptyChooseModel.Visibility = noModel ? Visibility.Visible : Visibility.Collapsed;
+        NoticeChooseModel.Visibility = noModel ? Visibility.Visible : Visibility.Collapsed;
+        Transcript.Visibility = hasConversation ? Visibility.Visible : Visibility.Collapsed;
+        EmptyStatePanel.Visibility = hasConversation ? Visibility.Collapsed : Visibility.Visible;
+        if (scrollToEnd && hasConversation) QueueTranscriptScroll();
+        if (!hasConversation)
+        {
+            _followLatest = true;
+            _hasUnseenOutput = false;
+            UpdateLatestAction();
+        }
+    }
+
+    private void UpdateRuntimeActions()
+    {
+        if (_chat is null) return;
+        RetryReplyButton.Visibility = _chat.ShowRetryReply ? Visibility.Visible : Visibility.Collapsed;
+        ConnectionNotice.Severity = _chat.HasErrorNotice ? InfoBarSeverity.Error : InfoBarSeverity.Warning;
+    }
+
+    private void PageScroll_ViewChanged(object sender, ScrollViewerViewChangedEventArgs args)
+    {
+        var offset = PageScroll.VerticalOffset;
+        var atBottom = PageScroll.ScrollableHeight - offset <= 48;
+        if (atBottom)
+        {
+            _followLatest = true;
+            _hasUnseenOutput = false;
+        }
+        else if (offset < _lastVerticalOffset - 1)
+            _followLatest = false;
+        _lastVerticalOffset = offset;
+        UpdateLatestAction();
+    }
 }

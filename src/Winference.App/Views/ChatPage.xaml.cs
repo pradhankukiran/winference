@@ -444,4 +444,96 @@ public sealed partial class ChatPage : Page
             Announce("The message could not be copied. Select its text and try again.");
         }
     }
+
+    private void Transcript_SizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        // Formatted blocks can grow after the raw-text change was batched.
+        // Follow only if the reader has not deliberately scrolled away.
+        if (_initialized && IsLoaded && args.NewSize.Height != args.PreviousSize.Height) QueueTranscriptScroll();
+    }
+
+    private static bool IsKeyDown(VirtualKey key) =>
+        (InputKeyboardSource.GetKeyStateForCurrentThread(key) & CoreVirtualKeyStates.Down) != 0;
+
+    private void Page_PreviewKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key != VirtualKey.Tab) return;
+        // A deliberate keyboard focus move may reveal its control. Automatic
+        // focus recovery from a disabled composer must not move the reader.
+        _keyboardFocusMove = true;
+        PageScroll.BringIntoViewOnFocusChange = true;
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+        {
+            _keyboardFocusMove = false;
+            PageScroll.BringIntoViewOnFocusChange = _followLatest;
+        });
+    }
+
+    private void Page_KeyUp(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key == VirtualKey.Tab)
+        {
+            _keyboardFocusMove = false;
+            PageScroll.BringIntoViewOnFocusChange = _followLatest;
+        }
+    }
+
+    private void Composer_TextCompositionStarted(TextBox sender, TextCompositionStartedEventArgs args)
+    {
+        _isComposing = true;
+    }
+
+    private void Composer_TextCompositionEnded(TextBox sender, TextCompositionEndedEventArgs args)
+    {
+        _isComposing = false;
+        // Some input methods commit before the key reaches the TextBox. The
+        // same physical Enter must not also submit the committed composition.
+        _suppressEnterUntilRelease |= IsKeyDown(VirtualKey.Enter);
+    }
+
+    private void Composer_KeyUp(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key == VirtualKey.Enter) _suppressEnterUntilRelease = false;
+    }
+
+    private void Composer_PreviewKeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key != VirtualKey.Enter || IsKeyDown(VirtualKey.Shift)) return;
+        if (_isComposing || _suppressEnterUntilRelease)
+        {
+            _suppressEnterUntilRelease = true;
+            return; // Leave the key to the native IME rather than submitting.
+        }
+        // Enter has one meaning outside composition. While loading/busy it
+        // must not insert an unexpected newline or queue a delayed submission.
+        args.Handled = true;
+        if (_chat?.SendCommand.CanExecute(null) != true) return;
+        _followLatest = true;
+        _chat.SendCommand.Execute(null);
+    }
+
+    private void Chat_PropertyChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(ChatViewModel.HasConversation))
+            UpdateConversationLayout(scrollToEnd: true);
+        if (args.PropertyName is nameof(ChatViewModel.IsConnecting) or nameof(ChatViewModel.IsGenerating) or
+            nameof(ChatViewModel.ShowConnectAction) or nameof(ChatViewModel.ShowDisconnectAction) or nameof(ChatViewModel.HasNotice) or
+            nameof(ChatViewModel.ShowRetryReply))
+            UpdateRuntimeActions();
+        if (args.PropertyName == nameof(ChatViewModel.IsGenerating) && _chat is not null)
+        {
+            if (_wasGenerating && !_chat.IsGenerating)
+            {
+                var lastReply = _chat.Messages.LastOrDefault(message => !message.IsUser);
+                var status = lastReply?.Status;
+                Announce(string.IsNullOrWhiteSpace(status) ? "Reply finished."
+                    : status.StartsWith("Reply ", StringComparison.OrdinalIgnoreCase) ? status.TrimEnd('.') + "."
+                    : $"Reply {status.TrimEnd('.').ToLowerInvariant()}.");
+                FrameworkElementAutomationPeer.FromElement(ResponseAnnouncement)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+                if (_followLatest && IsLoaded) Composer.Focus(FocusState.Programmatic);
+            }
+            else if (_chat.IsGenerating) Announce(string.Empty);
+            _wasGenerating = _chat.IsGenerating;
+        }
+    }
 }

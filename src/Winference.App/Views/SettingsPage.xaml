@@ -1,0 +1,224 @@
+<Page
+    x:Class="Winference.App.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="Page_Loaded"
+    AutomationProperties.AutomationId="SettingsPage">
+    <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+        <Border Style="{StaticResource WinferencePageHeaderStyle}">
+            <Grid MaxWidth="{StaticResource WinferenceContentWidth}">
+                <TextBlock Text="Settings" Style="{StaticResource WinferencePageTitleStyle}"
+                           AutomationProperties.AutomationId="SettingsHeading" AutomationProperties.HeadingLevel="Level1" />
+            </Grid>
+        </Border>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid Padding="{StaticResource WinferencePagePadding}">
+            <StackPanel MaxWidth="{StaticResource WinferenceContentWidth}" Spacing="8">
+                <InfoBar x:Name="PageError" IsOpen="False" IsClosable="False" Severity="Error"
+                         AutomationProperties.AutomationId="SettingsError" />
+
+                <Border Style="{StaticResource WinferenceGroupStyle}">
+                    <StackPanel>
+                        <Border Style="{StaticResource WinferenceRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBlock Text="Appearance" Style="{StaticResource WinferenceSectionTitleStyle}" VerticalAlignment="Center"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                                <ComboBox x:Name="AppearanceChoices" Grid.Column="1" MinWidth="140" SelectedIndex="0" VerticalAlignment="Center"
+                                          SelectionChanged="AppearanceChoices_SelectionChanged"
+                                          AutomationProperties.AutomationId="SettingsAppearance" AutomationProperties.Name="Appearance">
+                                    <ComboBoxItem Content="System" AutomationProperties.AutomationId="AppearanceSystem" />
+                                    <ComboBoxItem Content="Light" AutomationProperties.AutomationId="AppearanceLight" />
+                                    <ComboBoxItem Content="Dark" AutomationProperties.AutomationId="AppearanceDark" />
+                                </ComboBox>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Unload model when idle" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock Text="Frees memory and your NPU or GPU. It loads again when you type." Style="{StaticResource WinferenceCaptionStyle}" />
+                                </StackPanel>
+                                <ComboBox x:Name="IdleChoices" Grid.Column="1" MinWidth="140" VerticalAlignment="Center"
+                                          SelectionChanged="IdleChoices_SelectionChanged"
+                                          AutomationProperties.AutomationId="SettingsIdleUnload" AutomationProperties.Name="Unload model when idle">
+                                    <ComboBoxItem Content="After 5 minutes" />
+                                    <ComboBoxItem Content="After 15 minutes" />
+                                    <ComboBoxItem Content="After 1 hour" />
+                                    <ComboBoxItem Content="Never" />
+                                </ComboBox>
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Load my model when Winference opens" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock Text="Off keeps startup instant." Style="{StaticResource WinferenceCaptionStyle}" />
+                                </StackPanel>
+                                <ToggleSwitch x:Name="LoadOnStartSwitch" Grid.Column="1" VerticalAlignment="Center" MinWidth="0" OnContent="" OffContent=""
+                                              Toggled="LoadOnStart_Toggled" AutomationProperties.AutomationId="SettingsLoadOnStart"
+                                              AutomationProperties.Name="Load my model when Winference opens" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Let models use tools (experimental)" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock Text="Models can check the date, this PC's details, and files or folders you allow. Winference asks before each look at your files. Small models may not use tools well."
+                                               Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch x:Name="ToolsSwitch" Grid.Column="1" VerticalAlignment="Center" MinWidth="0" OnContent="" OffContent=""
+                                              Toggled="Tools_Toggled" AutomationProperties.AutomationId="SettingsTools"
+                                              AutomationProperties.Name="Let models use tools" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Response style" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock x:Name="StyleHint" Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ComboBox x:Name="StyleChoices" Grid.Column="1" MinWidth="140" VerticalAlignment="Center"
+                                          SelectionChanged="StyleChoices_SelectionChanged"
+                                          AutomationProperties.AutomationId="SettingsResponseStyle" AutomationProperties.Name="Response style" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <StackPanel Spacing="8">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Custom instructions" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock Text="Sent with every message, for example: &quot;Answer briefly. I'm a nurse in Germany.&quot; Saved when you leave the box."
+                                               Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <TextBox x:Name="InstructionsBox" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="72" MaxHeight="160" MaxLength="2000"
+                                         PlaceholderText="How should replies be written?" LostFocus="InstructionsBox_LostFocus"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         AutomationProperties.AutomationId="SettingsInstructions" AutomationProperties.Name="Custom instructions" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Storage" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock x:Name="DataFolderText" Style="{StaticResource WinferenceCaptionStyle}" IsTextSelectionEnabled="True"
+                                               AutomationProperties.AutomationId="SettingsDataFolder" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="Open folder" Click="OpenDataFolder_Click" VerticalAlignment="Center"
+                                        AutomationProperties.AutomationId="OpenDataFolder" AutomationProperties.Name="Open app data folder" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <TextBlock Text="Diagnostics" Style="{StaticResource WinferenceSectionTitleStyle}" VerticalAlignment="Center"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                                <Button Grid.Column="1" Content="Open logs" Click="OpenLogs_Click" VerticalAlignment="Center"
+                                        AutomationProperties.AutomationId="OpenLogs" AutomationProperties.Name="Open diagnostics folder" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Margin="0,16,0,0" Spacing="2">
+                    <TextBlock Text="Voice, images and search" Style="{StaticResource WinferenceSectionTitleStyle}"
+                               AutomationProperties.AutomationId="AddonsHeading" AutomationProperties.HeadingLevel="Level2" />
+                    <TextBlock Text="Optional add-ons that run on this PC with the bundled Lemonade server. Each is a one-time download."
+                               Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                </StackPanel>
+                <Border Style="{StaticResource WinferenceGroupStyle}">
+                    <StackPanel>
+                        <ItemsControl x:Name="AddonList" IsTabStop="False" AutomationProperties.AutomationId="AddonList">
+                            <ItemsControl.ItemTemplate><DataTemplate>
+                                <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                                    <Grid ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource WinferenceSectionTitleStyle}" />
+                                            <TextBlock Text="{Binding Meta}" Style="{StaticResource WinferenceCaptionStyle}" />
+                                            <TextBlock Text="{Binding Description}" Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                            <StackPanel Spacing="4" Margin="0,6,0,0" Visibility="{Binding BusyVisibility}">
+                                                <ProgressBar Value="{Binding Progress}" IsIndeterminate="{Binding IsIndeterminate}" Maximum="100" />
+                                                <TextBlock Text="{Binding Detail}" Style="{StaticResource WinferenceCaptionStyle}"
+                                                           AutomationProperties.LiveSetting="Polite" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="{Binding ActionLabel}" Click="Addon_Click" VerticalAlignment="Center" MinWidth="88"
+                                                AutomationProperties.Name="{Binding ActionName}" AutomationProperties.AutomationId="AddonAction" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate></ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <Border Style="{StaticResource WinferenceRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Read-aloud voice" Style="{StaticResource WinferenceSectionTitleStyle}" />
+                                    <TextBlock x:Name="VoiceHint" Text="Get Kokoro above to choose a natural voice." Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ComboBox x:Name="VoiceChoices" Grid.Column="1" MinWidth="180" VerticalAlignment="Center" IsEnabled="False"
+                                          SelectionChanged="VoiceChoices_SelectionChanged"
+                                          AutomationProperties.AutomationId="SettingsVoice" AutomationProperties.Name="Read-aloud voice" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <Grid Margin="0,16,0,0" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="This PC" Style="{StaticResource WinferenceSectionTitleStyle}" VerticalAlignment="Center"
+                               AutomationProperties.AutomationId="ThisPcHeading" AutomationProperties.HeadingLevel="Level2" />
+                    <Button x:Name="RefreshButton" Grid.Column="1" Click="Refresh_Click" Style="{StaticResource WinferenceSubtleButtonStyle}" ToolTipService.ToolTip="Refresh this PC"
+                            AutomationProperties.AutomationId="RefreshThisPc" AutomationProperties.Name="Refresh this PC">
+                        <FontIcon Glyph="&#xE72C;" FontSize="14" />
+                    </Button>
+                </Grid>
+                <ProgressBar x:Name="BusyBar" IsIndeterminate="True" Visibility="Collapsed"
+                             AutomationProperties.Name="Checking this PC" AutomationProperties.AutomationId="ThisPcProgress" />
+                <Border Style="{StaticResource WinferenceGroupStyle}">
+                    <StackPanel>
+                        <Grid Padding="16,14" ColumnSpacing="24" RowSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="100" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Processor" Style="{StaticResource WinferenceSecondaryTextStyle}" />
+                            <TextBlock x:Name="ProcessorText" Grid.Column="1" Text="Checking…" TextWrapping="Wrap"
+                                       IsTextSelectionEnabled="True" AutomationProperties.AutomationId="ThisPcProcessor" />
+                            <TextBlock Grid.Row="1" Text="Graphics" Style="{StaticResource WinferenceSecondaryTextStyle}" />
+                            <TextBlock x:Name="GraphicsText" Grid.Row="1" Grid.Column="1" Text="Checking…" TextWrapping="Wrap"
+                                       IsTextSelectionEnabled="True" AutomationProperties.AutomationId="ThisPcGraphics" />
+                            <TextBlock Grid.Row="2" Text="NPU" Style="{StaticResource WinferenceSecondaryTextStyle}" />
+                            <TextBlock x:Name="NeuralProcessorText" Grid.Row="2" Grid.Column="1" Text="Checking…" TextWrapping="Wrap"
+                                       IsTextSelectionEnabled="True" AutomationProperties.AutomationId="ThisPcNpuHardware" />
+                            <TextBlock Grid.Row="3" Text="Memory" Style="{StaticResource WinferenceSecondaryTextStyle}" />
+                            <TextBlock x:Name="MemoryText" Grid.Row="3" Grid.Column="1" Text="Checking…" TextWrapping="Wrap"
+                                       AutomationProperties.AutomationId="ThisPcMemory" />
+                        </Grid>
+                        <ItemsControl ItemsSource="{x:Bind Runtimes}" IsTabStop="False"
+                                      AutomationProperties.AutomationId="ThisPcRuntimes" AutomationProperties.Name="AI runtimes">
+                            <ItemsControl.ItemTemplate><DataTemplate>
+                                <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                                    <Grid ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource WinferenceSectionTitleStyle}" />
+                                            <TextBlock Text="{Binding Meta}" Style="{StaticResource WinferenceCaptionStyle}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{Binding Status}" Style="{StaticResource WinferenceSecondaryTextStyle}" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate></ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Page>

@@ -142,4 +142,79 @@ public sealed partial class SettingsPage : Page
         ToolsSwitch.IsOn = enabled;
         _applyingAppearance = false;
     }
+
+    private void Tools_Toggled(object sender, RoutedEventArgs args)
+    {
+        if (!_applyingAppearance) ToolsEnabledChanged?.Invoke(this, ToolsSwitch.IsOn);
+    }
+
+    private void LoadOnStart_Toggled(object sender, RoutedEventArgs args)
+    {
+        if (!_applyingAppearance) LoadOnStartChanged?.Invoke(this, LoadOnStartSwitch.IsOn);
+    }
+
+    public void SetBusy(bool busy)
+    {
+        BusyBar.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        RefreshButton.IsEnabled = !busy;
+        if (busy) PageError.IsOpen = false;
+    }
+
+    public void Show(SetupInspection inspection, GpuRuntimeStatus gpu, HybridRuntimeStatus hybrid)
+    {
+        PageError.IsOpen = false;
+        ProcessorText.Text = inspection.Processor;
+        GraphicsText.Text = inspection.Graphics;
+        NeuralProcessorText.Text = inspection.NeuralProcessor;
+        MemoryText.Text = inspection.MemoryBytes > 0
+            ? $"{inspection.MemoryBytes / 1_073_741_824d:0.#} GB"
+            : "Unknown";
+
+        var radeon = inspection.Graphics.Contains("Radeon", StringComparison.OrdinalIgnoreCase);
+        Runtimes[0] = Runtime(NpuName, inspection.RuntimeStatus,
+            inspection.NpuDetected ? inspection.DriverStatus : "No supported NPU",
+            inspection.NpuDetected && inspection.RuntimeInstalled);
+        Runtimes[1] = Runtime(HybridName, hybrid.Status,
+            hybrid.Installation is { } hybridRuntime ? $"Runtime {hybridRuntime.ReleaseTag}" : "Runtime not installed",
+            inspection.NpuDetected && radeon && hybrid.IsInstalled);
+        Runtimes[2] = Runtime(GpuName, gpu.Status,
+            gpu.Installation is { } gpuRuntime ? $"Runtime {gpuRuntime.ReleaseTag}" : "Runtime not installed",
+            radeon && gpu.IsInstalled);
+    }
+
+    public void ShowError(string message)
+    {
+        SetBusy(false);
+        PageError.Message = message;
+        PageError.IsOpen = true;
+    }
+
+    private static RuntimeStatusItem Runtime(string name, string detail, string meta, bool isReady) =>
+        new(name, string.IsNullOrWhiteSpace(detail) ? "Status unavailable." : detail,
+            isReady ? "Ready" : "Not ready", meta ?? string.Empty);
+
+    private void Page_Loaded(object sender, RoutedEventArgs args) => RefreshRequested?.Invoke(this, EventArgs.Empty);
+    private void Refresh_Click(object sender, RoutedEventArgs args) => RefreshRequested?.Invoke(this, EventArgs.Empty);
+    private void OpenDataFolder_Click(object sender, RoutedEventArgs args) => OpenDataFolderRequested?.Invoke(this, EventArgs.Empty);
+    private void OpenLogs_Click(object sender, RoutedEventArgs args) => OpenLogsRequested?.Invoke(this, EventArgs.Empty);
+
+    private void AppearanceChoices_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        // The selector can report -1 while its template loads; that is not a user choice.
+        if (_applyingAppearance || sender is not ComboBox { SelectedIndex: >= 0 } choices) return;
+        AppearanceChanged?.Invoke(this, choices.SelectedIndex switch
+        {
+            1 => ElementTheme.Light,
+            2 => ElementTheme.Dark,
+            _ => ElementTheme.Default
+        });
+    }
+}
+
+public sealed class RuntimeStatusItem(string name, string detail, string status, string meta)
+{
+    public string Name { get; } = name;
+    public string Detail { get; } = detail;
+    public string Status { get; } = status;
+    public string Meta { get; } = meta;
 }

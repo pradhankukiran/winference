@@ -80,4 +80,66 @@ public sealed partial class SettingsPage : Page
         addons.Changed += (_, _) => RefreshVoice();
         RefreshVoice();
     }
+
+    private void RefreshVoice()
+    {
+        if (_addons is null) return;
+        _applyingAppearance = true;
+        VoiceChoices.SelectedIndex = Math.Max(0, _addons.Voices.ToList().FindIndex(voice => voice.Id == _addons.Voice));
+        VoiceChoices.IsEnabled = _addons.HasVoiceAddon;
+        VoiceHint.Text = _addons.HasVoiceAddon ? "Kokoro voices. Replies are read with this voice." : "Get Kokoro above to choose a natural voice. Until then Windows' own voice is used.";
+        _applyingAppearance = false;
+    }
+
+    private void VoiceChoices_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (_applyingAppearance || _addons is null || VoiceChoices.SelectedIndex < 0) return;
+        _addons.SetVoice(_addons.Voices[VoiceChoices.SelectedIndex].Id);
+    }
+
+    private async void Addon_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement { DataContext: Winference.App.ViewModels.MediaAddonItem item }) await item.ActAsync();
+    }
+
+    public event EventHandler<string>? InstructionsChanged;
+    public event EventHandler<string>? ResponseStyleChanged;
+    private string _savedInstructions = string.Empty;
+
+    /// <summary>Reflects saved chat preferences without raising them back as changes.</summary>
+    public void SetChatPreferences(string instructions, string style)
+    {
+        _applyingAppearance = true;
+        _savedInstructions = instructions;
+        InstructionsBox.Text = instructions;
+        StyleChoices.Items.Clear();
+        foreach (var option in Winference.Core.Runtime.ResponseStyles.All) StyleChoices.Items.Add(option.Label);
+        var index = Winference.Core.Runtime.ResponseStyles.All.ToList().FindIndex(option => option.Id == style);
+        StyleChoices.SelectedIndex = index >= 0 ? index : 1;
+        StyleHint.Text = Winference.Core.Runtime.ResponseStyles.All[StyleChoices.SelectedIndex].Description;
+        _applyingAppearance = false;
+    }
+
+    private void StyleChoices_SelectionChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (StyleChoices.SelectedIndex < 0) return;
+        var option = Winference.Core.Runtime.ResponseStyles.All[StyleChoices.SelectedIndex];
+        StyleHint.Text = option.Description;
+        if (!_applyingAppearance) ResponseStyleChanged?.Invoke(this, option.Id);
+    }
+
+    private void InstructionsBox_LostFocus(object sender, RoutedEventArgs args)
+    {
+        var text = InstructionsBox.Text.Trim();
+        if (text == _savedInstructions) return;
+        _savedInstructions = text;
+        InstructionsChanged?.Invoke(this, text);
+    }
+
+    public void SetToolsEnabled(bool enabled)
+    {
+        _applyingAppearance = true;
+        ToolsSwitch.IsOn = enabled;
+        _applyingAppearance = false;
+    }
 }

@@ -122,4 +122,95 @@ public sealed partial class MainWindow : Window, IShellNavigator
         SyncCaptionTheme();
         AppWindow.Closing += AppWindow_Closing;
     }
+
+    bool IShellNavigator.IsChatVisible => ShellLayout.Visibility == Visibility.Visible && ReferenceEquals(PageHost.Content, _chatPage);
+
+    void IShellNavigator.ShowChat(bool navigate)
+    {
+        _chatPage = new ChatPage(ViewModel, _library, _readAloud);
+        _chatPage.ChooseModelRequested += (_, _) => ShowShell(ShellPage.Models);
+        if (ViewModel.Chat is { } chat) chat.ConversationQuery = ConversationSearch.Text;
+        if (navigate) ShowShell(ShellPage.Chat);
+    }
+
+    void IShellNavigator.ShowModels() => ShowShell(ShellPage.Models);
+    void IShellNavigator.FocusComposer() => _chatPage?.FocusComposer();
+
+    private void ShowShell(ShellPage page)
+    {
+        if (_lifetime.IsClosing) return;
+        SetupHost.Visibility = Visibility.Collapsed;
+        ShellLayout.Visibility = Visibility.Visible;
+        PageHost.Content = page switch
+        {
+            ShellPage.Models => _modelsPage,
+            ShellPage.Settings => _settingsPage,
+            _ => (object?)_chatPage ?? _modelsPage
+        };
+        FooterNavigation.SelectedItem = PageHost.Content switch
+        {
+            ModelsPage => NavigationItems[0],
+            SettingsPage => NavigationItems[1],
+            _ => null
+        };
+    }
+
+    private async Task StartAsync()
+    {
+        try { await _conversations.LoadAsync(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        { ViewModel.ReportShellError("Saved chats could not be opened. Check this app's storage access before closing."); }
+        if (_lifetime.IsClosing) return;
+        if (_conversations.Warning is { } warning) ViewModel.ReportShellError(warning);
+        var opened = await _session.OpenSavedAsync(loadInBackground: _preferences.Read().LoadOnStart);
+        if (TestHardware.StartPage() is { } page) ShowShell(page);
+        if (opened || _lifetime.IsClosing) return;
+        SetupHost.Content = _welcomePage;
+        SetupHost.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Asks before a model uses a tool that can see files on this PC.</summary>
+    private Task<bool> ConfirmToolAsync(Winference.Core.Tools.ToolCall call, Winference.Core.Tools.LocalTool tool)
+    {
+        var target = Winference.Core.Tools.BuiltInTools.ResolvePath(call.Arguments);
+        var lines = new List<string> { $"{ViewModel.ModelName} wants to use {call.Name}: {tool.Description}" };
+        lines.Add(target is not null ? $"Location: {target}" : $"Details: {call.ArgumentsJson}");
+        lines.Add("What it finds is shown only to the model on this PC. Nothing is changed or sent anywhere.");
+        return _dialogs.ConfirmAsync("Allow the model to look at this?", [.. lines], "Allow once");
+    }
+
+    private async Task<string?> PickModelFileAsync()
+    {
+        var picker = new Windows.Storage.Pickers.FileOpenPicker();
+        picker.FileTypeFilter.Add(".gguf");
+        picker.FileTypeFilter.Add(".json");
+        picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.Downloads;
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var picking = picker.PickSingleFileAsync();
+        using var cancel = _lifetime.Token.Register(picking.Cancel);
+        return (await picking)?.Path;
+    }
+
+    private async void Settings_RefreshRequested(object? sender, EventArgs args)
+    {
+        if (_lifetime.IsClosing) return;
+        _settingsPage.SetBusy(true);
+        try
+        {
+            var inspection = _setupService.InspectAsync(_lifetime.Token);
+            var gpu = _gpuRuntime.InspectAsync(_lifetime.Token);
+            var hybrid = _hybridRuntime.InspectAsync(_lifetime.Token);
+            await Task.WhenAll(inspection, gpu, hybrid);
+            if (!_lifetime.IsClosing) _settingsPage.Show(await inspection, await gpu, await hybrid);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsClosing) { }
+        catch (Exception error)
+        {
+            if (!_lifetime.IsClosing) _settingsPage.ShowError(error is RuntimeException runtime ? runtime.Message : "This PC could not be checked. Try Refresh.");
+        }
+        finally
+        {
+            if (!_lifetime.IsClosing) _settingsPage.SetBusy(false);
+        }
+    }
 }

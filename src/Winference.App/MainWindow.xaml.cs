@@ -273,4 +273,69 @@ public sealed partial class MainWindow : Window, IShellNavigator
         if (args.TryGetPosition(sender, out var point)) menu.ShowAt(sender, point);
         else menu.ShowAt(source);
     }
+
+    /// <summary>Opens the chat if needed, then saves it as a Markdown file the user picks.</summary>
+    private async Task ExportConversationAsync(ConversationListItem item)
+    {
+        if (ViewModel.Chat is not { } chat) return;
+        if (chat.SelectedConversation?.Id != item.Id)
+        {
+            if (!chat.CanChooseConversation) return;
+            chat.SelectedConversation = item;
+        }
+        var picker = new Windows.Storage.Pickers.FileSavePicker
+        {
+            SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary,
+            SuggestedFileName = System.IO.Path.GetFileNameWithoutExtension(chat.ExportFileName)
+        };
+        picker.FileTypeChoices.Add("Markdown", new List<string> { ".md" });
+        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
+        var file = await picker.PickSaveFileAsync();
+        if (file is null) return;
+        try { await System.IO.File.WriteAllTextAsync(file.Path, chat.ExportMarkdown(), new System.Text.UTF8Encoding(false)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            await _dialogs.InformAsync("The chat wasn't exported", ["It couldn't be saved there. Choose another folder and try again."]);
+        }
+    }
+
+    private async Task RenameConversationAsync(ConversationListItem item)
+    {
+        if (ViewModel.Chat is not { } chat) return;
+        var title = await _dialogs.AskTextAsync("Rename chat", item.Title, "Rename");
+        if (title is not null) chat.RenameConversation(item.Id, title);
+    }
+
+    private async void ConversationList_KeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key != Windows.System.VirtualKey.Delete || ViewModel.Chat?.SelectedConversation is not { } item) return;
+        args.Handled = true;
+        await DeleteConversationAsync(item);
+    }
+
+    private async Task DeleteConversationAsync(ConversationListItem item)
+    {
+        if (ViewModel.Chat is not { } chat) return;
+        if (!chat.CanChooseConversation)
+        {
+            ViewModel.ReportShellError("Wait for the current reply to finish before deleting a chat.");
+            return;
+        }
+        if (await _dialogs.ConfirmAsync($"Delete \"{item.Title}\"?", ["This chat will be permanently removed from this PC."], "Delete"))
+            chat.DeleteConversation(item.Id);
+    }
+
+    private void FooterNavigation_ItemClick(object sender, ItemClickEventArgs args)
+    {
+        if (args.ClickedItem is ShellNavigationItem item) ShowShell(item.Page);
+    }
+
+    private void NewChatShortcut_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        if (ViewModel.Chat is not { CanNewChat: true } chat) return;
+        chat.NewChatCommand.Execute(null);
+        ShowShell(ShellPage.Chat);
+        _chatPage?.FocusComposer();
+    }
 }

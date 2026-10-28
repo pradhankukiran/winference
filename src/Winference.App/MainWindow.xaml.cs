@@ -338,4 +338,68 @@ public sealed partial class MainWindow : Window, IShellNavigator
         ShowShell(ShellPage.Chat);
         _chatPage?.FocusComposer();
     }
+
+    private void SearchShortcut_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowConversationSearch();
+    }
+
+    private void ModelShortcut_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = true;
+        ShowShell(ShellPage.Chat);
+        _chatPage?.OpenModelPicker();
+    }
+
+    private void StopShortcut_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (ViewModel.Chat is not { CanStopReply: true } chat) return;
+        args.Handled = true;
+        chat.StopCommand.Execute(null);
+    }
+
+    private async void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_cleanupComplete) return;
+        args.Cancel = true;
+        if (_lifetime.IsClosing) return;
+        _lifetime.BeginClosing();
+        RootLayout.IsHitTestVisible = false;
+        try
+        {
+            if (ViewModel.Chat is { } chat) await chat.ShutdownAsync();
+            if (_session.PendingChange is { } changing) await changing;
+            if (_library.PendingDownload is { } downloading) await downloading;
+            await _conversations.FlushAsync();
+            _readAloud.Dispose();
+            await _media.DisposeAsync();
+            _cleanupComplete = true;
+            Close();
+        }
+        catch (Exception exception)
+        {
+            AppDiagnostics.Write("runtime.cleanup.failed", new { type = exception.GetType().Name });
+            ViewModel.ReportShellError("Saving chats or stopping AI did not finish. This window stays open so you can check storage and try closing again.");
+            RootLayout.IsHitTestVisible = true;
+            _lifetime.Reset();
+        }
+    }
+
+    private void ShellError_CloseButtonClick(InfoBar sender, object args) => ViewModel.DismissShellError();
+    private void Offer_CloseButtonClick(InfoBar sender, object args) => _library.ClearOffer();
+    private async void UseOffered_Click(object sender, RoutedEventArgs args) => await _library.UseOfferedAsync();
+    private void OpenLogs_Click(object sender, RoutedEventArgs args) => App.OpenLogsFolder();
+
+    private void ApplyIdleTimeout(int minutes) => _session.IdleTimeout =
+        TestHardware.IdleTimeoutOverride() ?? (minutes > 0 ? TimeSpan.FromMinutes(minutes) : null);
+
+    private void Settings_IdleUnloadChanged(object? sender, int minutes)
+    {
+        ApplyIdleTimeout(minutes);
+        _preferences.Write(_preferences.Read() with { IdleUnloadMinutes = minutes });
+    }
+
+    private void Settings_LoadOnStartChanged(object? sender, bool load) =>
+        _preferences.Write(_preferences.Read() with { LoadOnStart = load });
 }

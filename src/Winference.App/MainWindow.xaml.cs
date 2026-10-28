@@ -213,4 +213,64 @@ public sealed partial class MainWindow : Window, IShellNavigator
             if (!_lifetime.IsClosing) _settingsPage.SetBusy(false);
         }
     }
+
+    private void NewChat_Click(object sender, RoutedEventArgs args)
+    {
+        ShowShell(ShellPage.Chat);
+        _chatPage?.FocusComposer();
+    }
+
+    private void Conversation_ItemClick(object sender, ItemClickEventArgs args) => ShowShell(ShellPage.Chat);
+
+    private void SearchToggle_Click(object sender, RoutedEventArgs args)
+    {
+        if (ConversationSearch.Visibility == Visibility.Visible) HideConversationSearch();
+        else ShowConversationSearch();
+    }
+
+    private void ShowConversationSearch()
+    {
+        ConversationSearch.Visibility = Visibility.Visible;
+        DispatcherQueue.TryEnqueue(() => ConversationSearch.Focus(FocusState.Keyboard));
+    }
+
+    private void HideConversationSearch()
+    {
+        ConversationSearch.Text = string.Empty;
+        ConversationSearch.Visibility = Visibility.Collapsed;
+    }
+
+    private void ConversationSearch_KeyDown(object sender, KeyRoutedEventArgs args)
+    {
+        if (args.Key != Windows.System.VirtualKey.Escape) return;
+        args.Handled = true;
+        HideConversationSearch();
+    }
+
+    private void ConversationSearch_TextChanged(object sender, TextChangedEventArgs args)
+    {
+        if (ViewModel.Chat is { } chat) chat.ConversationQuery = ConversationSearch.Text;
+    }
+
+    private void Conversations_ContextRequested(UIElement sender, ContextRequestedEventArgs args)
+    {
+        if (args.OriginalSource is not FrameworkElement { DataContext: ConversationListItem item } source) return;
+        args.Handled = true;
+        // Reusing one menu left its items unresponsive the second time it opened, so each request gets its own.
+        var menu = new MenuFlyout();
+        var rename = new MenuFlyoutItem { Text = "Rename" };
+        rename.Click += async (_, _) => await RenameConversationAsync(item);
+        AutomationProperties.SetAutomationId(rename, "RenameChat");
+        var delete = new MenuFlyoutItem { Text = "Delete" };
+        delete.Click += async (_, _) => await DeleteConversationAsync(item);
+        AutomationProperties.SetAutomationId(delete, "DeleteChat");
+        var export = new MenuFlyoutItem { Text = "Export as Markdown…" };
+        export.Click += async (_, _) => await ExportConversationAsync(item);
+        AutomationProperties.SetAutomationId(export, "ExportChat");
+        menu.Items.Add(rename);
+        menu.Items.Add(export);
+        menu.Items.Add(delete);
+        if (args.TryGetPosition(sender, out var point)) menu.ShowAt(sender, point);
+        else menu.ShowAt(source);
+    }
 }

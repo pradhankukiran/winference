@@ -452,4 +452,40 @@ public sealed partial class MainWindow : Window, IShellNavigator
         _started = true;
         await StartAsync();
     }
+
+    private void XamlRoot_Changed(XamlRoot sender, XamlRootChangedEventArgs args) => UpdateMinimumSize();
+
+    private void ConfigureWindowBounds()
+    {
+        var display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary);
+        var workArea = display.WorkArea;
+        var scale = GetWindowScale();
+        var margin = (int)Math.Round(40 * scale);
+        var width = Math.Min((int)Math.Round(1160 * scale), Math.Max(1, workArea.Width - margin));
+        var height = Math.Min((int)Math.Round(820 * scale), Math.Max(1, workArea.Height - margin));
+        var x = workArea.X + Math.Max(0, (workArea.Width - width) / 2);
+        var y = workArea.Y + Math.Max(0, (workArea.Height - height) / 2);
+        AppWindow.MoveAndResize(new RectInt32(x, y, width, height));
+        UpdateMinimumSize();
+    }
+
+    private void UpdateMinimumSize()
+    {
+        if (AppWindow.Presenter is not OverlappedPresenter presenter) return;
+        var display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary);
+        var scale = GetWindowScale();
+        presenter.PreferredMinimumWidth = Math.Min((int)Math.Round(840 * scale), display.WorkArea.Width);
+        presenter.PreferredMinimumHeight = Math.Min((int)Math.Round(600 * scale), display.WorkArea.Height);
+    }
+
+    private double GetWindowScale()
+    {
+        if (RootLayout.XamlRoot is not null) return RootLayout.XamlRoot.RasterizationScale;
+        var handle = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        var dpi = GetDpiForWindow(handle);
+        return dpi > 0 ? dpi / 96d : 1d;
+    }
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern uint GetDpiForWindow(IntPtr window);
 }

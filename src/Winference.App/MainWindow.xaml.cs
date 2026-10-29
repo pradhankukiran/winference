@@ -402,4 +402,54 @@ public sealed partial class MainWindow : Window, IShellNavigator
 
     private void Settings_LoadOnStartChanged(object? sender, bool load) =>
         _preferences.Write(_preferences.Read() with { LoadOnStart = load });
+
+    private void Settings_AppearanceChanged(object? sender, ElementTheme theme)
+    {
+        // The selector also reports its initial value when it first loads.
+        if (RootLayout.RequestedTheme == theme) return;
+        RootLayout.RequestedTheme = theme;
+        SyncCaptionTheme();
+        if (!_preferences.Write(_preferences.Read() with { Theme = theme.ToString() }))
+            AppDiagnostics.Write("appearance.save.failed");
+    }
+
+    private void RestoreAppearance()
+    {
+        if (!Enum.TryParse<ElementTheme>(_preferences.Read().Theme, out var theme)) return;
+        RootLayout.RequestedTheme = theme;
+        _settingsPage.SetAppearance(theme);
+    }
+
+    private void RootLayout_ActualThemeChanged(FrameworkElement sender, object args)
+    {
+        if (_initialized) SyncCaptionTheme();
+    }
+
+    private void SyncCaptionTheme()
+    {
+        // Native caption rendering still belongs to Windows, including contrast
+        // themes; this only mirrors the current window's light/dark preference.
+        if (AppWindowTitleBar.IsCustomizationSupported())
+        {
+            AppWindow.TitleBar.PreferredTheme = RootLayout.RequestedTheme switch
+            {
+                ElementTheme.Light => TitleBarTheme.Light,
+                ElementTheme.Dark => TitleBarTheme.Dark,
+                _ => TitleBarTheme.UseDefaultAppMode
+            };
+        }
+    }
+
+    private async void RootLayout_Loaded(object sender, RoutedEventArgs args)
+    {
+        UpdateMinimumSize();
+        if (RootLayout.XamlRoot is not null) RootLayout.XamlRoot.Changed += XamlRoot_Changed;
+        Closed += (_, _) =>
+        {
+            if (RootLayout.XamlRoot is not null) RootLayout.XamlRoot.Changed -= XamlRoot_Changed;
+        };
+        if (_started) return;
+        _started = true;
+        await StartAsync();
+    }
 }

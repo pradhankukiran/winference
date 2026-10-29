@@ -49,4 +49,77 @@ public sealed class DocumentIndexTests
         Assert.Contains("--- a.txt ---", prompt);
         Assert.Contains("--- b.txt ---", prompt);
     }
+
+    [Fact]
+    public void Removing_a_document_removes_its_text()
+    {
+        var index = new LocalVectorIndex();
+        var document = index.AddDocument("a.txt", "secret project codename falcon");
+        Assert.True(index.RemoveDocument(document.Id));
+        Assert.Equal(string.Empty, index.BuildContextPrompt("falcon", 4000));
+    }
+}
+
+public sealed class DocumentReaderTests : IDisposable
+{
+    private readonly string _folder = Directory.CreateTempSubdirectory("winference-docs-").FullName;
+
+    public void Dispose() => Directory.Delete(_folder, recursive: true);
+
+    [Fact]
+    public async Task Plain_text_and_markdown_are_read()
+    {
+        var path = Path.Combine(_folder, "notes.md");
+        await File.WriteAllTextAsync(path, "# Title\r\nBody text");
+        Assert.Equal("# Title\nBody text", await DocumentTextReader.ReadAsync(path));
+    }
+
+    [Fact]
+    public async Task Html_is_reduced_to_its_text()
+    {
+        var path = Path.Combine(_folder, "page.html");
+        await File.WriteAllTextAsync(path, "<html><style>p{}</style><script>alert(1)</script><p>Hello &amp; welcome</p></html>");
+        Assert.Equal("Hello & welcome", await DocumentTextReader.ReadAsync(path));
+    }
+
+    [Fact]
+    public async Task Word_documents_are_read_paragraph_by_paragraph()
+    {
+        var path = Path.Combine(_folder, "letter.docx");
+        using (var zip = ZipFile.Open(path, ZipArchiveMode.Create))
+        {
+            var entry = zip.CreateEntry("word/document.xml");
+            await using var stream = entry.Open();
+            await stream.WriteAsync(Encoding.UTF8.GetBytes(
+                "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>" +
+                "<w:p><w:r><w:t>Dear Sam,</w:t></w:r></w:p><w:p><w:r><w:t xml:space=\"preserve\">See you </w:t></w:r><w:r><w:t>soon.</w:t></w:r></w:p>" +
+                "</w:body></w:document>"));
+        }
+        Assert.Equal("Dear Sam,\nSee you soon.", await DocumentTextReader.ReadAsync(path));
+    }
+
+    [Theory]
+    [InlineData("scan.pdf", "PDF")]
+    [InlineData("tool.exe", "isn't a supported document")]
+    public async Task Unsupported_files_are_explained(string name, string expected)
+    {
+        var path = Path.Combine(_folder, name);
+        await File.WriteAllBytesAsync(path, [1, 2, 3]);
+        var error = await Assert.ThrowsAsync<RuntimeException>(() => DocumentTextReader.ReadAsync(path));
+        Assert.Contains(expected, error.Message);
+    }
+
+    [Fact]
+    public async Task Binary_content_with_a_text_extension_is_rejected()
+    {
+        var path = Path.Combine(_folder, "data.txt");
+        await File.WriteAllBytesAsync(path, [0x41, 0x00, 0x42, 0x00, 0x00, 0x01]);
+        var error = await Assert.ThrowsAsync<RuntimeException>(() => DocumentTextReader.ReadAsync(path));
+        Assert.Equal("document_binary", error.Code);
+    }
+}
+
+public sealed class AttachmentStoreTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("winference-attach-").FullName;
 }

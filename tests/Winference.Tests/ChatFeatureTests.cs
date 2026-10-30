@@ -171,4 +171,117 @@ public sealed class ToolBrokerTests
         broker.RegisterRange(BuiltInTools.GetAll());
         return broker;
     }
+
+    [Theory]
+    [InlineData("<tool_call>{\"name\": \"list_directory\", \"arguments\": {\"path\": \"C:\\\\Users\"}}</tool_call>")]
+    [InlineData("Sure.\n<tool_call>\n{\"name\":\"list_directory\",\"arguments\":{\"path\":\"C:\\\\Users\"}}")]
+    [InlineData("```json\n{\"name\": \"list_directory\", \"arguments\": {\"path\": \"C:\\\\Users\"}}\n```")]
+    [InlineData("<tool_call>{\"name\": \"list_directory\", \"arguments\": \"{\\\"path\\\": \\\"C:\\\\\\\\Users\\\"}\"}</tool_call>")]
+    [InlineData("/tool_call={\"tool_name\": \"list_directory\", \"arguments\": {\"path\": \"C:\\\\Users\"}}")]
+    [InlineData("/tool_call={\"tool\": \"nope\"}\n/tool_call={\"name\": \"list_directory\", \"arguments\": {\"path\": \"C:\\\\Users\"}}")]
+    [InlineData("{\"type\": \"function\", \"function\": {\"name\": \"list_directory\", \"arguments\": {\"path\": \"C:\\\\Users\"}}}")]
+    [InlineData("<tool_call>\"list_directory\", {\"path\": \"C:\\\\Users\"}</tool_call>")]
+    [InlineData("list_directory({\"path\": \"C:\\\\Users\"})")]
+    public void Tool_requests_are_found_in_common_shapes(string reply)
+    {
+        var call = Broker().ParseToolCall(reply);
+        Assert.NotNull(call);
+        Assert.Equal("list_directory", call.Name);
+        Assert.Equal(@"C:\Users", call.Arguments.GetProperty("path").GetString());
+    }
+
+    [Theory]
+    [InlineData("The capital of France is Paris.")]
+    [InlineData("<tool_call>{\"name\": \"delete_everything\", \"arguments\": {}}</tool_call>")]
+    [InlineData("<tool_call>{not json</tool_call>")]
+    [InlineData("You can ask me to run list_directory on a folder, for example {\"path\": \"C:\\\\Users\"}.")]
+    [InlineData("<tool_call>\"list_directory\"</tool_call>")]
+    public void Ordinary_replies_and_unknown_tools_are_not_calls(string reply) =>
+        Assert.Null(Broker().ParseToolCall(reply));
+
+    [Fact]
+    public async Task Tool_results_are_bounded_and_failures_become_readable_errors()
+    {
+        var broker = new ToolExecutionBroker();
+        broker.Register(new LocalTool("big", "Returns a lot.", [], (_, _) => Task.FromResult(new string('x', 50_000))));
+        broker.Register(new LocalTool("broken", "Throws.", [], (_, _) => throw new InvalidOperationException("boom")));
+
+        var big = await broker.ExecuteAsync(broker.ParseToolCall("<tool_call>{\"name\":\"big\"}</tool_call>")!);
+        Assert.True(big.Length < ToolExecutionBroker.MaxResultChars + 32);
+        var broken = await broker.ExecuteAsync(broker.ParseToolCall("<tool_call>{\"name\":\"broken\"}</tool_call>")!);
+        Assert.Contains("boom", broken);
+    }
+
+    [Fact]
+    public void Unreadable_requests_are_still_recognised_as_tool_requests()
+    {
+        const string reply = "<tool_call>please list the files</tool_call>";
+        Assert.Null(Broker().ParseToolCall(reply));
+        Assert.True(ToolExecutionBroker.LooksLikeToolCall(reply));
+        Assert.False(ToolExecutionBroker.LooksLikeToolCall("Here are your files."));
+    }
+
+    [Fact]
+    public void Tools_that_see_files_ask_first()
+    {
+        var broker = Broker();
+        Assert.True(broker.Find("read_local_file")!.AsksFirst);
+        Assert.True(broker.Find("list_directory")!.AsksFirst);
+        Assert.False(broker.Find("get_current_datetime")!.AsksFirst);
+    }
+
+    [Fact]
+    public void Relative_paths_are_rejected()
+    {
+        using var relative = JsonDocument.Parse("{\"path\": \"..\\\\secrets.txt\"}");
+        Assert.Null(BuiltInTools.ResolvePath(relative.RootElement));
+    }
+
+    [Fact]
+    public async Task Reading_a_file_returns_its_text()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"winference-tool-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "hello from disk");
+        try
+        {
+            var broker = Broker();
+            var call = broker.ParseToolCall($"<tool_call>{JsonSerializer.Serialize(new { name = "read_local_file", arguments = new { path } })}</tool_call>")!;
+            Assert.Contains("hello from disk", await broker.ExecuteAsync(call));
+        }
+        finally { File.Delete(path); }
+    }
+}
+
+public sealed class SpeechTextTests
+{
+    [Fact]
+    public void Markdown_formatting_is_not_read_aloud()
+    {
+        var spoken = SpeechText.FromMarkdown("## Steps\n\n1. Open **Settings**\n- See [the docs](https://example.com)\n\n```cs\nvar x = 1;\n```\n---\nUse `dotnet`.");
+        Assert.Equal("Steps\nOpen Settings\nSee the docs\n(code block)\nUse dotnet.", spoken);
+    }
+}
+
+public sealed class MediaAddonTests
+{
+    // Captured from Lemonade 2026.42.1 while pulling Whisper-Tiny and kokoro-v1.
+    [Fact]
+    public void Pull_progress_adds_up_files_and_finishes_on_complete()
+    {
+        var parser = new Winference.Core.Media.PullStreamParser();
+        var lines = new[]
+        {
+            "event: progress",
+            "data: {\"bytes_downloaded\":0,\"bytes_previously_downloaded\":0,\"bytes_total\":1519,\"file\":\".gitattributes\",\"file_index\":1,\"percent\":0,\"total_download_size\":3000,\"total_files\":2}",
+            "",
+            "event: progress",
+            "data: {\"bytes_downloaded\":1000,\"bytes_previously_downloaded\":0,\"bytes_total\":1519,\"file\":\".gitattributes\",\"file_index\":1,\"percent\":66,\"total_download_size\":3000,\"total_files\":2}",
+            "event: progress",
+            "data: {\"bytes_downloaded\":500,\"bytes_previously_downloaded\":0,\"bytes_total\":1481,\"file\":\"model.onnx\",\"file_index\":2,\"percent\":33,\"total_download_size\":3000,\"total_files\":2}",
+        };
+        Winference.Core.Media.MediaDownloadProgress? last = null;
+        foreach (var line in lines) last = parser.Feed(line) ?? last;
+        Assert.Equal(1500, last!.BytesDone);
+        Assert.Equal(0.5, last.Fraction, 3);
+    }
 }

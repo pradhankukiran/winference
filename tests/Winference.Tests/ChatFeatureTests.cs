@@ -122,4 +122,53 @@ public sealed class DocumentReaderTests : IDisposable
 public sealed class AttachmentStoreTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("winference-attach-").FullName;
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    [Fact]
+    public void Attachments_survive_a_new_store_and_are_scoped_to_their_chat()
+    {
+        var chat = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var added = new ConversationAttachmentStore(_root).Add(chat, @"C:\Users\me\plan.txt", "Ship the beta on Friday.");
+
+        var reopened = new ConversationAttachmentStore(_root);
+        Assert.Equal("plan.txt", Assert.Single(reopened.List(chat)).FileName);
+        Assert.Empty(reopened.List(other));
+        Assert.Contains("Friday", reopened.LoadIndex(chat).BuildContextPrompt("beta", 4000));
+
+        Assert.True(reopened.Remove(chat, added.Id));
+        Assert.Empty(reopened.List(chat));
+    }
+
+    [Fact]
+    public void Deleting_a_chat_deletes_its_documents()
+    {
+        var store = new ConversationAttachmentStore(_root);
+        var chat = Guid.NewGuid();
+        store.Add(chat, "a.txt", "text");
+        store.DeleteConversation(chat);
+        Assert.Empty(store.List(chat));
+        Assert.False(Directory.Exists(Path.Combine(_root, "Attachments", chat.ToString("N"))));
+    }
+
+    [Fact]
+    public void A_chat_has_a_document_limit()
+    {
+        var store = new ConversationAttachmentStore(_root);
+        var chat = Guid.NewGuid();
+        for (var i = 0; i < ConversationAttachmentStore.MaxAttachmentsPerChat; i++) store.Add(chat, $"{i}.txt", "text");
+        var error = Assert.Throws<RuntimeException>(() => store.Add(chat, "extra.txt", "text"));
+        Assert.Equal("attachment_limit", error.Code);
+    }
+}
+
+public sealed class ToolBrokerTests
+{
+    private static ToolExecutionBroker Broker()
+    {
+        var broker = new ToolExecutionBroker();
+        broker.RegisterRange(BuiltInTools.GetAll());
+        return broker;
+    }
 }

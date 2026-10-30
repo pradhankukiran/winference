@@ -283,5 +283,74 @@ public sealed class MediaAddonTests
         foreach (var line in lines) last = parser.Feed(line) ?? last;
         Assert.Equal(1500, last!.BytesDone);
         Assert.Equal(0.5, last.Fraction, 3);
+
+        Assert.Null(parser.Feed("event: complete"));
+        var done = parser.Feed("data: {\"bytes_downloaded\":0,\"bytes_previously_downloaded\":0,\"bytes_total\":0,\"file\":\"\",\"file_index\":2,\"percent\":100,\"total_download_size\":0,\"total_files\":2}");
+        Assert.True(done!.Complete);
+        Assert.Equal(1, done.Fraction);
+    }
+
+    [Fact]
+    public void Pull_errors_are_reported()
+    {
+        var parser = new Winference.Core.Media.PullStreamParser();
+        parser.Feed("event: error");
+        var error = Assert.Throws<RuntimeException>(() => parser.Feed("data: {\"error\":\"Repository not found\"}"));
+        Assert.Contains("Repository not found", error.Message);
+    }
+
+    [Fact]
+    public void Each_feature_has_one_default_add_on()
+    {
+        foreach (var kind in Enum.GetValues<Winference.Core.Media.MediaKind>())
+            Assert.Single(Winference.Core.Media.MediaAddons.OfKind(kind), addon => addon.IsDefault);
+    }
+}
+
+public sealed class MediaCleanupTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("winference-media-").FullName;
+    private string Models => Path.Combine(_root, "models");
+    private string Engines => Path.Combine(_root, "bin");
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    private string Fake(string relative, int bytes)
+    {
+        var path = Path.Combine(_root, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, new byte[bytes]);
+        return path;
+    }
+
+    private static Winference.Core.Media.MediaAddon Addon(string model) => Winference.Core.Media.MediaAddons.Find(model)!;
+
+    [Fact]
+    public void Removing_the_only_whisper_deletes_its_npu_file_folder_and_engine()
+    {
+        var snapshot = Path.Combine("models", "models--ggerganov--whisper.cpp", "snapshots", "abc");
+        Fake(Path.Combine(snapshot, "ggml-base-encoder-vitisai.rai"), 25 * 1024 * 1024);
+        Fake(Path.Combine("models", "models--ggerganov--whisper.cpp", ".lemonade_registry.json"), 100);
+        Fake(Path.Combine("bin", "whispercpp", "whisper-server.exe"), 10);
+
+        Winference.Core.Media.MediaAddons.CleanUp(Addon("Whisper-Base"), new HashSet<string>(), Models, Engines);
+
+        Assert.False(Directory.Exists(Path.Combine(Models, "models--ggerganov--whisper.cpp")));
+        Assert.False(Directory.Exists(Path.Combine(Engines, "whispercpp")));
+    }
+
+    [Fact]
+    public void Another_installed_whisper_keeps_its_files_and_the_shared_engine()
+    {
+        var snapshot = Path.Combine("models", "models--ggerganov--whisper.cpp", "snapshots", "abc");
+        var removed = Fake(Path.Combine(snapshot, "ggml-base-encoder-vitisai.rai"), 2 * 1024 * 1024);
+        var kept = Fake(Path.Combine(snapshot, "ggml-small.bin"), 2 * 1024 * 1024);
+        Fake(Path.Combine("bin", "whispercpp", "whisper-server.exe"), 10);
+
+        Winference.Core.Media.MediaAddons.CleanUp(Addon("Whisper-Base"), new HashSet<string> { "Whisper-Small" }, Models, Engines);
+
+        Assert.False(File.Exists(removed));
+        Assert.True(File.Exists(kept));
+        Assert.True(Directory.Exists(Path.Combine(Engines, "whispercpp")));
     }
 }

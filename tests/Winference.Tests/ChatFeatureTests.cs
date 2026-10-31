@@ -406,5 +406,82 @@ public sealed class SemanticSearchTests : IDisposable
         var chat = Guid.NewGuid();
         var item = store.Add(chat, "a.txt", "text");
         store.SaveEmbeddings(chat, item.Id, "nomic-embed-text-v1-GGUF", [[0.5f, -1f], [2f, 3f]]);
+
+        var loaded = store.LoadEmbeddings(chat, item.Id, "nomic-embed-text-v1-GGUF")!;
+        Assert.Equal([2f, 3f], loaded[1]);
+        Assert.Null(store.LoadEmbeddings(chat, item.Id, "other-model"));
+
+        store.Remove(chat, item.Id);
+        Assert.Null(store.LoadEmbeddings(chat, item.Id, "nomic-embed-text-v1-GGUF"));
+    }
+
+    [Fact]
+    public void Embedding_responses_are_ordered_by_index()
+    {
+        using var json = JsonDocument.Parse("{\"data\":[{\"index\":1,\"embedding\":[3,4]},{\"index\":0,\"embedding\":[1,2]}]}");
+        var vectors = Winference.Infrastructure.Lemonade.LemonadeMediaService.ParseEmbeddings(json.RootElement, 2);
+        Assert.Equal([1f, 2f], vectors[0]);
+        Assert.Equal([3f, 4f], vectors[1]);
+        Assert.Throws<RuntimeException>(() => Winference.Infrastructure.Lemonade.LemonadeMediaService.ParseEmbeddings(json.RootElement, 3));
+    }
+}
+
+public sealed class ResponseStyleTests
+{
+    [Theory]
+    [InlineData("precise", 0.2)]
+    [InlineData("balanced", 0.7)]
+    [InlineData("creative", 1.0)]
+    [InlineData("unknown", 0.7)]
+    [InlineData(null, 0.7)]
+    public void Styles_map_to_temperatures(string? style, double expected) =>
+        Assert.Equal(expected, ResponseStyles.TemperatureFor(style));
+
+    [Fact]
+    public async Task The_chosen_temperature_reaches_the_engine()
+    {
+        var backend = new FakeBackend();
+        var broker = new RuntimeBroker(backend);
+        await broker.StartAsync(TestProfiles.Create());
+        await foreach (var _ in broker.GenerateAsync([new("user", "hi")], null, CancellationToken.None, 0.2)) { }
+        Assert.Equal(0.2, backend.LastRequest!.Temperature);
+    }
+
+    [Fact]
+    public async Task Out_of_range_temperatures_are_rejected()
+    {
+        var broker = new RuntimeBroker(new FakeBackend());
+        await broker.StartAsync(TestProfiles.Create());
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
+        {
+            await foreach (var _ in broker.GenerateAsync([new("user", "hi")], null, CancellationToken.None, 5)) { }
+        });
+    }
+}
+
+public sealed class VisionTests
+{
+    private static readonly ChatImage Picture = new("image/jpeg", [0xFF, 0xD8, 0xFF, 0xD9]);
+
+    [Fact]
+    public async Task Pictures_are_refused_by_models_that_cannot_see()
+    {
+        var broker = new RuntimeBroker(new FakeBackend());
+        await broker.StartAsync(TestProfiles.Create());
+        var error = await Assert.ThrowsAsync<RuntimeException>(async () =>
+        {
+            await foreach (var _ in broker.GenerateAsync([new("user", "what is this?", [Picture])])) { }
+        });
+        Assert.Equal("ImagesUnsupported", error.Code);
+    }
+
+    [Fact]
+    public async Task Vision_models_receive_the_picture()
+    {
+        var backend = new FakeBackend();
+        var broker = new RuntimeBroker(backend);
+        await broker.StartAsync(TestProfiles.Create() with { SupportsImages = true });
+        await foreach (var _ in broker.GenerateAsync([new("user", "what is this?", [Picture])])) { }
+        Assert.Same(Picture, Assert.Single(backend.LastRequest!.Messages[^1].Images!));
     }
 }

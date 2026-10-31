@@ -353,4 +353,58 @@ public sealed class MediaCleanupTests : IDisposable
         Assert.True(File.Exists(kept));
         Assert.True(Directory.Exists(Path.Combine(Engines, "whispercpp")));
     }
+
+    [Fact]
+    public void Other_engines_are_left_alone()
+    {
+        Fake(Path.Combine("bin", "sd-cpp", "sd.exe"), 10);
+        Fake(Path.Combine("bin", "kokoro", "koko.exe"), 10);
+
+        Winference.Core.Media.MediaAddons.CleanUp(Addon("kokoro-v1"), new HashSet<string>(), Models, Engines);
+
+        Assert.False(Directory.Exists(Path.Combine(Engines, "kokoro")));
+        Assert.True(Directory.Exists(Path.Combine(Engines, "sd-cpp")));
+    }
+}
+
+public sealed class SemanticSearchTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("winference-vectors-").FullName;
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    [Fact]
+    public void Meaning_ranks_a_passage_that_shares_no_words_with_the_question()
+    {
+        var index = new LocalVectorIndex();
+        var filler = string.Join(' ', Enumerable.Repeat("lorem ipsum dolor", 120));
+        var text = filler + " " + "The car needs new tyres before winter." + " " + filler;
+        var document = index.AddDocument("notes.txt", text, chunkWords: 60, chunkOverlap: 0);
+        var target = document.Chunks.Single(chunk => chunk.Content.Contains("tyres")).ChunkIndex;
+        // Fake embeddings: the chunk about tyres points the same way as the question.
+        var vectors = document.Chunks.Select(chunk => chunk.ChunkIndex == target ? new[] { 1f, 0f } : new[] { 0f, 1f }).ToArray();
+        Assert.True(index.SetEmbeddings(document.Id, vectors));
+
+        var prompt = index.BuildContextPrompt("What maintenance does my vehicle require?", 600, [0.9f, 0.1f]);
+
+        Assert.Contains("tyres", prompt);
+    }
+
+    [Fact]
+    public void Embeddings_must_match_the_chunk_count()
+    {
+        var index = new LocalVectorIndex();
+        var document = index.AddDocument("a.txt", "one two three");
+        Assert.False(index.SetEmbeddings(document.Id, [[1f], [2f]]));
+        Assert.False(index.HasEmbeddings(document.Id));
+    }
+
+    [Fact]
+    public void Saved_embeddings_round_trip_and_are_removed_with_the_attachment()
+    {
+        var store = new ConversationAttachmentStore(_root);
+        var chat = Guid.NewGuid();
+        var item = store.Add(chat, "a.txt", "text");
+        store.SaveEmbeddings(chat, item.Id, "nomic-embed-text-v1-GGUF", [[0.5f, -1f], [2f, 3f]]);
+    }
 }

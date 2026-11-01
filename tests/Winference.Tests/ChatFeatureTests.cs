@@ -484,4 +484,38 @@ public sealed class VisionTests
         await foreach (var _ in broker.GenerateAsync([new("user", "what is this?", [Picture])])) { }
         Assert.Same(Picture, Assert.Single(backend.LastRequest!.Messages[^1].Images!));
     }
+
+    [Fact]
+    public void Pictures_go_to_the_engine_as_openai_content_parts()
+    {
+        var wire = System.Text.Json.JsonSerializer.Serialize(
+            Winference.Infrastructure.Lemonade.LemonadeBackend.ToWire(new ChatMessage("user", "what is this?", [Picture])));
+        Assert.Contains("\"type\":\"text\",\"text\":\"what is this?\"", wire);
+        Assert.Contains("\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,/9j/2Q==\"}", wire);
+        var plain = System.Text.Json.JsonSerializer.Serialize(Winference.Infrastructure.Lemonade.LemonadeBackend.ToWire(new ChatMessage("user", "hi")));
+        Assert.Equal("{\"role\":\"user\",\"content\":\"hi\"}", plain);
+    }
+
+    [Fact]
+    public void Picture_estimates_include_their_token_allowance()
+    {
+        var text = PromptTokenCount.Estimate([new("user", "hi")]).Tokens;
+        var withPicture = PromptTokenCount.Estimate([new("user", "hi", [Picture])]).Tokens;
+        Assert.Equal(ChatImage.TokenBudget, withPicture - text);
+    }
+
+    [Fact]
+    public void Npu_vision_models_are_offered_and_marked()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "config", "catalogs"))) directory = directory.Parent;
+        Assert.NotNull(directory);
+        var catalogs = Path.Combine(directory.FullName, "config", "catalogs");
+        var catalog = Winference.Infrastructure.Setup.FlmModelCatalog.Load(
+            Path.Combine(catalogs, "flm-1.0.10.json"), Path.Combine(catalogs, "flm-1.0.10-model-info.json"));
+        var vision = catalog.Models.Where(model => model.SupportsImages).Select(model => model.DisplayName).ToArray();
+        Assert.Contains(vision, name => name.Contains("VL", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(vision, name => name.Contains("MiniCPM-V", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(catalog.Models, model => model.DisplayName.Contains("Transcript", StringComparison.OrdinalIgnoreCase) && model.SupportsImages);
+    }
 }

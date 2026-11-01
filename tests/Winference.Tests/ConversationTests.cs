@@ -55,5 +55,47 @@ public class ConversationSessionTests
         await Assert.ThrowsAsync<IOException>(session.LoadAsync);
         session.Update(Conversation("new empty chat"));
         await Assert.ThrowsAsync<IOException>(session.FlushAsync);
+
+        Assert.Equal(0, store.Saves);
+        Assert.True(session.HasSaveError);
+    }
+
+    [Fact]
+    public void Rename_keeps_the_name_marked_as_chosen_by_the_user()
+    {
+        var session = new ConversationSession(new MemoryConversationStore());
+        var conversation = Conversation("hello");
+        session.Update(conversation);
+
+        Assert.True(session.Rename(conversation.Id, "  Trip plans  "));
+
+        var renamed = session.Workspace.Conversations.Single();
+        Assert.Equal("Trip plans", renamed.Title);
+        Assert.True(renamed.HasCustomTitle);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Rename_ignores_a_blank_name(string title)
+    {
+        var session = new ConversationSession(new MemoryConversationStore());
+        var conversation = Conversation("hello");
+        session.Update(conversation);
+
+        Assert.False(session.Rename(conversation.Id, title));
+        Assert.Equal("hello", session.Workspace.Conversations.Single().Title);
+    }
+
+    [Fact]
+    public void Deleting_the_open_chat_moves_to_the_most_recent_other_chat()
+    {
+        var session = new ConversationSession(new MemoryConversationStore());
+        var older = Conversation("older", DateTimeOffset.UtcNow.AddDays(-2));
+        var newer = Conversation("newer", DateTimeOffset.UtcNow.AddDays(-1));
+        var open = Conversation("open");
+        session.Update(older);
+        session.Update(newer);
+        session.Update(open);
     }
 }

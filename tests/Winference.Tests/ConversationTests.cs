@@ -179,4 +179,70 @@ public class JsonConversationStoreTests
         new(Guid.NewGuid(), "model", "profile", "artifact", "Title", DateTimeOffset.UtcNow, string.Empty, messages);
 
     private static string WorkspacePath(string root) => Path.Combine(root, "Chat", "workspace.json");
+
+    [Fact]
+    public async Task A_renamed_chat_survives_a_restart()
+    {
+        using var folder = new TemporaryFolder();
+        var conversation = Conversation() with { Title = "Mine", HasCustomTitle = true };
+        await new JsonConversationStore(folder.Path).SaveAsync(new(ChatWorkspace.CurrentSchemaVersion, conversation.Id, [conversation]));
+
+        var loaded = await new JsonConversationStore(folder.Path).LoadAsync();
+
+        Assert.True(loaded.Workspace.Conversations.Single().HasCustomTitle);
+    }
+
+    [Fact]
+    public async Task Chats_saved_before_rename_existed_still_open()
+    {
+        using var folder = new TemporaryFolder();
+        var conversation = Conversation();
+        await new JsonConversationStore(folder.Path).SaveAsync(new(ChatWorkspace.CurrentSchemaVersion, conversation.Id, [conversation]));
+        var path = WorkspacePath(folder.Path);
+        var legacy = (await File.ReadAllTextAsync(path)).Replace("\"hasCustomTitle\": false,", string.Empty).Replace(",\n      \"hasCustomTitle\": false", string.Empty).Replace(",\r\n      \"hasCustomTitle\": false", string.Empty);
+        Assert.DoesNotContain("hasCustomTitle", legacy);
+        await File.WriteAllTextAsync(path, legacy);
+
+        var loaded = await new JsonConversationStore(folder.Path).LoadAsync();
+
+        Assert.Equal(conversation.Id, loaded.Workspace.Conversations.Single().Id);
+        Assert.False(loaded.Workspace.Conversations.Single().HasCustomTitle);
+    }
+
+    [Fact]
+    public async Task A_corrupt_file_is_kept_and_a_copy_is_made_before_it_is_replaced()
+    {
+        using var folder = new TemporaryFolder();
+        var path = WorkspacePath(folder.Path);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{ this is not json");
+        var store = new JsonConversationStore(folder.Path);
+
+        var loaded = await store.LoadAsync();
+        Assert.NotNull(loaded.Warning);
+        Assert.Empty(loaded.Workspace.Conversations);
+
+        var conversation = Conversation();
+        await store.SaveAsync(new(ChatWorkspace.CurrentSchemaVersion, conversation.Id, [conversation]));
+
+        var preserved = Directory.GetFiles(Path.GetDirectoryName(path)!, "workspace.preserved-*.json").Single();
+        Assert.Equal("{ this is not json", await File.ReadAllTextAsync(preserved));
+    }
+
+    [Fact]
+    public async Task A_reply_cut_off_by_a_crash_comes_back_as_interrupted()
+    {
+        using var folder = new TemporaryFolder();
+        var user = new SavedChatMessage(Guid.NewGuid(), "user", "hi", string.Empty, true);
+        var assistant = new SavedChatMessage(Guid.NewGuid(), "assistant", "par", "Thinking…", false, AttemptOutcome: "running");
+        var conversation = Conversation(user, assistant);
+        await new JsonConversationStore(folder.Path).SaveAsync(new(ChatWorkspace.CurrentSchemaVersion, conversation.Id, [conversation]));
+
+        var loaded = await new JsonConversationStore(folder.Path).LoadAsync();
+
+        var restored = loaded.Workspace.Conversations.Single().Messages[1];
+        Assert.Equal("interrupted", restored.AttemptOutcome);
+        Assert.Equal("Interrupted", restored.Status);
+        Assert.NotNull(loaded.Warning);
+    }
 }

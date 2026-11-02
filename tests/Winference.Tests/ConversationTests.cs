@@ -97,5 +97,86 @@ public class ConversationSessionTests
         session.Update(older);
         session.Update(newer);
         session.Update(open);
+
+        Assert.True(session.Delete(open.Id));
+
+        Assert.Equal(newer.Id, session.Workspace.ActiveConversationId);
+        Assert.Equal(2, session.Workspace.Conversations.Count);
     }
+
+    [Fact]
+    public void Deleting_the_last_chat_leaves_nothing_active()
+    {
+        var session = new ConversationSession(new MemoryConversationStore());
+        var only = Conversation("only");
+        session.Update(only);
+
+        session.Delete(only.Id);
+
+        Assert.Null(session.Workspace.ActiveConversationId);
+        Assert.Empty(session.Workspace.Conversations);
+    }
+
+    [Fact]
+    public void Deleting_a_different_chat_keeps_the_open_one_open()
+    {
+        var session = new ConversationSession(new MemoryConversationStore());
+        var other = Conversation("other");
+        var open = Conversation("open");
+        session.Update(other);
+        session.Update(open);
+
+        session.Delete(other.Id);
+
+        Assert.Equal(open.Id, session.Workspace.ActiveConversationId);
+    }
+
+    [Fact]
+    public void A_reply_from_another_model_is_flagged_even_if_the_chat_was_relabelled()
+    {
+        Assert.True(ConversationSession.ModelChanged("gguf:abc", "qwen3:0.6b", null, null));
+    }
+
+    [Fact]
+    public void A_reply_from_the_same_model_is_not_flagged()
+    {
+        Assert.False(ConversationSession.ModelChanged("qwen3:0.6b", "qwen3:0.6b", null, null));
+    }
+
+    [Fact]
+    public void A_chat_with_no_replies_is_not_flagged()
+    {
+        Assert.False(ConversationSession.ModelChanged(null, "qwen3:0.6b", null, null));
+    }
+
+    [Fact]
+    public void Builds_reviewed_as_the_same_checkpoint_are_not_flagged()
+    {
+        var shared = new Core.Models.ConversationCompatibility("checkpoint", "1", "tokenizer", "template");
+        Assert.False(ConversationSession.ModelChanged("gguf:abc", "hybrid:def", shared, shared));
+    }
+
+    [Fact]
+    public void Search_finds_titles_and_message_text_newest_first()
+    {
+        var session = new ConversationSession(new MemoryConversationStore());
+        var title = Conversation("Tea notes", DateTimeOffset.UtcNow.AddDays(-1));
+        var body = Conversation("Other", DateTimeOffset.UtcNow, "I love green TEA");
+        session.Update(title);
+        session.Update(body);
+        session.Update(Conversation("Rivers"));
+
+        var found = session.Search("tea");
+
+        Assert.Equal([body.Id, title.Id], found.Select(item => item.Id));
+        Assert.Equal(3, session.Search("  ").Count);
+    }
+}
+
+public class JsonConversationStoreTests
+{
+    private static SavedConversation Conversation(params SavedChatMessage[] messages) =>
+        new(Guid.NewGuid(), "model", "profile", "artifact", "Title", DateTimeOffset.UtcNow, string.Empty, messages);
+
+    private static string WorkspacePath(string root) => Path.Combine(root, "Chat", "workspace.json");
 }

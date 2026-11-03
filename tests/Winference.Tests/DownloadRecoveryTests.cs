@@ -68,4 +68,49 @@ public class DownloadRecoveryTests
         Assert.False(File.Exists(destination));
         Assert.True(new FileInfo(destination + ".part").Length >= 100_000);
     }
+
+    [Fact]
+    public async Task A_retry_resumes_from_the_saved_bytes_and_verifies_the_whole_file()
+    {
+        using var folder = new TemporaryFolder();
+        var destination = Path.Combine(folder.Path, "model.bin");
+        await File.WriteAllBytesAsync(destination + ".part", Payload[..100_000]);
+        var server = new FakeServer(Payload);
+        using var client = new HttpClient(server);
+
+        await PinnedRuntimeAcquisition.DownloadVerifiedAsync(client, Source, destination, Payload.Length, PayloadHash, NoProgress, CancellationToken.None);
+
+        Assert.Equal(100_000, server.LastRange!.Ranges.Single().From);
+        Assert.Equal(Payload, await File.ReadAllBytesAsync(destination));
+        Assert.False(File.Exists(destination + ".part"));
+    }
+
+    [Fact]
+    public async Task A_corrupted_download_is_never_published()
+    {
+        using var folder = new TemporaryFolder();
+        var destination = Path.Combine(folder.Path, "model.bin");
+        var corrupted = (byte[])Payload.Clone();
+        corrupted[^1] ^= 0xFF;
+        using var client = new HttpClient(new FakeServer(corrupted));
+
+        await Assert.ThrowsAsync<RuntimeException>(() => PinnedRuntimeAcquisition.DownloadVerifiedAsync(
+            client, Source, destination, Payload.Length, PayloadHash, NoProgress, CancellationToken.None));
+
+        Assert.False(File.Exists(destination));
+    }
+
+    [Fact]
+    public async Task A_finished_file_is_not_downloaded_again()
+    {
+        using var folder = new TemporaryFolder();
+        var destination = Path.Combine(folder.Path, "model.bin");
+        await File.WriteAllBytesAsync(destination, Payload);
+        var server = new FakeServer(Payload);
+        using var client = new HttpClient(server);
+
+        await PinnedRuntimeAcquisition.DownloadVerifiedAsync(client, Source, destination, Payload.Length, PayloadHash, NoProgress, CancellationToken.None);
+
+        Assert.Null(server.LastRange);
+    }
 }

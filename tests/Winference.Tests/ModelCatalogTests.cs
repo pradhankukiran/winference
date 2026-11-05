@@ -159,4 +159,87 @@ public class AppPreferencesStoreTests
 
         Assert.Equal(new AppPreferences("Dark", ModelFilter.Npu), new AppPreferencesStore(folder.Path).Read());
     }
+
+    [Fact]
+    public void Choices_saved_before_idle_unload_existed_get_its_defaults()
+    {
+        using var folder = new TemporaryFolder();
+        File.WriteAllText(Path.Combine(folder.Path, "preferences.json"), "{ \"theme\": \"Dark\", \"modelFilter\": \"All\" }");
+        var preferences = new AppPreferencesStore(folder.Path).Read();
+        Assert.Equal(IdleUnloadPolicy.DefaultMinutes, preferences.IdleUnloadMinutes);
+        Assert.False(preferences.LoadOnStart);
+    }
+
+    [Fact]
+    public void A_filter_saved_as_text_or_a_number_both_read_back()
+    {
+        using var folder = new TemporaryFolder();
+        File.WriteAllText(Path.Combine(folder.Path, "preferences.json"), "{ \"theme\": \"Dark\", \"modelFilter\": \"Npu\" }");
+        Assert.Equal(ModelFilter.Npu, new AppPreferencesStore(folder.Path).Read().ModelFilter);
+        File.WriteAllText(Path.Combine(folder.Path, "preferences.json"), "{ \"theme\": \"Dark\", \"modelFilter\": 3 }");
+        Assert.Equal(ModelFilter.Gpu, new AppPreferencesStore(folder.Path).Read().ModelFilter);
+    }
+
+    [Fact]
+    public void A_damaged_file_falls_back_to_defaults()
+    {
+        using var folder = new TemporaryFolder();
+        File.WriteAllText(Path.Combine(folder.Path, "preferences.json"), "not json");
+
+        Assert.Equal(new AppPreferences(), new AppPreferencesStore(folder.Path).Read());
+    }
+}
+
+public class ModelStatusRulesTests
+{
+    private static ModelStatus Resolve(bool installed = false, bool repair = false, bool downloading = false,
+        bool failed = false, bool selected = false, bool loading = false, bool loaded = false) =>
+        ModelStatusRules.Resolve(installed, repair, downloading, failed, selected, loading, loaded);
+
+    [Fact] public void An_absent_model_is_not_installed() => Assert.Equal(ModelStatus.NotInstalled, Resolve());
+    [Fact] public void An_installed_model_is_ready() => Assert.Equal(ModelStatus.Ready, Resolve(installed: true));
+    [Fact] public void A_download_outranks_everything() => Assert.Equal(ModelStatus.Downloading, Resolve(downloading: true, failed: true));
+    [Fact] public void The_selected_model_shows_loading() => Assert.Equal(ModelStatus.Loading, Resolve(installed: true, selected: true, loading: true));
+    [Fact] public void The_loaded_model_is_current() => Assert.Equal(ModelStatus.Current, Resolve(installed: true, selected: true, loaded: true));
+    [Fact] public void Only_the_selected_model_can_be_current() => Assert.Equal(ModelStatus.Ready, Resolve(installed: true, loaded: true));
+    [Fact] public void A_retry_in_progress_is_not_shown_as_failed() => Assert.Equal(ModelStatus.Loading, Resolve(installed: true, failed: true, selected: true, loading: true));
+    [Fact] public void A_failed_load_is_shown() => Assert.Equal(ModelStatus.Failed, Resolve(installed: true, failed: true, selected: true));
+    [Fact] public void A_moved_file_needs_repair() => Assert.Equal(ModelStatus.Failed, Resolve(repair: true));
+}
+
+public class ModelNamesTests
+{
+    [Theory]
+    [InlineData("Llama-3.2-1B-Instruct", "Llama 3.2 1B Instruct")]
+    [InlineData("Llama 3.2 1B Instruct", "Llama 3.2 1B Instruct")]
+    [InlineData("Qwen3-0.6B", "Qwen 3 0.6B")]
+    [InlineData("Gemma3-1B", "Gemma 3 1B")]
+    [InlineData("LFM2-1.2B", "LFM2 1.2B")]
+    [InlineData("LFM2.5-1.2B", "LFM2.5 1.2B")]
+    [InlineData("DeepSeek-R1-0528-Qwen3-8B", "DeepSeek R1 0528 Qwen 3 8B")]
+    [InlineData("GPT-OSS-20B", "GPT-OSS 20B")]
+    [InlineData("gpt-oss-safeguard-20b", "GPT-OSS Safeguard 20B")]
+    [InlineData("Phi4-mini-Instruct", "Phi 4 Mini Instruct")]
+    [InlineData("Phi-4 Mini Instruct", "Phi 4 Mini Instruct")]
+    [InlineData("Nanbeige4.1-3B", "Nanbeige 4.1 3B")]
+    [InlineData("Qwen 2.5 0.5B Instruct", "Qwen 2.5 0.5B Instruct")]
+    public void Names_read_the_same_everywhere(string raw, string expected)
+    {
+        Assert.Equal(expected, ModelNames.Clean(raw));
+    }
+
+    [Fact] public void A_missing_name_stays_empty() => Assert.Equal(string.Empty, ModelNames.Clean(null));
+}
+
+public class IdleUnloadPolicyTests
+{
+    private static readonly DateTimeOffset Start = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+    private static readonly TimeSpan Limit = TimeSpan.FromMinutes(15);
+
+    [Fact] public void A_model_stays_loaded_before_the_timeout() => Assert.False(IdleUnloadPolicy.ShouldUnload(Start, Start.AddMinutes(14), Limit, true, false));
+    [Fact] public void A_model_unloads_at_the_timeout() => Assert.True(IdleUnloadPolicy.ShouldUnload(Start, Start.AddMinutes(15), Limit, true, false));
+    [Fact] public void Time_asleep_counts_as_idle() => Assert.True(IdleUnloadPolicy.ShouldUnload(Start, Start.AddHours(8), Limit, true, false));
+    [Fact] public void It_never_unloads_during_a_reply_or_load() => Assert.False(IdleUnloadPolicy.ShouldUnload(Start, Start.AddHours(1), Limit, true, true));
+    [Fact] public void Never_means_never() => Assert.False(IdleUnloadPolicy.ShouldUnload(Start, Start.AddDays(7), null, true, false));
+    [Fact] public void Nothing_happens_when_no_model_is_loaded() => Assert.False(IdleUnloadPolicy.ShouldUnload(Start, Start.AddHours(1), Limit, false, false));
 }

@@ -8,8 +8,6 @@
 
 [![Build](https://img.shields.io/github/actions/workflow/status/pradhankukiran/winference/release.yml?branch=main&label=build&logo=githubactions&logoColor=white)](https://github.com/pradhankukiran/winference/actions/workflows/release.yml)
 [![Latest build](https://img.shields.io/github/v/release/pradhankukiran/winference?include_prereleases&display_name=release&label=latest&color=6d28d9)](https://github.com/pradhankukiran/winference/releases/tag/latest-build)
-[![Downloads](https://img.shields.io/github/downloads/pradhankukiran/winference/total?color=6d28d9)](https://github.com/pradhankukiran/winference/releases)
-[![Last commit](https://img.shields.io/github/last-commit/pradhankukiran/winference?color=6d28d9)](https://github.com/pradhankukiran/winference/commits/main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-6d28d9)](LICENSE)
 
 [![Windows 11](https://img.shields.io/badge/Windows%2011-0078D4?logo=windows11&logoColor=white)](#requirements)

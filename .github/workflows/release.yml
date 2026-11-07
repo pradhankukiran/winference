@@ -1,11 +1,17 @@
 name: Release
 
-# Every push to main replaces the "Latest build" pre-release with a new installer.
-# Pushing a tag like v1.0.1 also creates a permanent "Winference 1.0.1" release.
+# Every push to main that changes the app replaces the "Latest build" pre-release.
+# Pushes that only touch docs are skipped; add [skip ci] to a commit message to skip by hand.
+# Pushing a tag like v1.0.1 always creates a permanent "Winference 1.0.1" release
+# (GitHub does not apply path filters to tag pushes).
 on:
   push:
     branches: [main]
     tags: ['v*.*.*']
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
   workflow_dispatch:
 
 permissions:

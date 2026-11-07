@@ -14,6 +14,15 @@ Nothing is sent to the cloud.
 - Read aloud, speech input, image generation and search by meaning through Lemonade add-ons.
 - Reply speed shown under each answer.
 
+## Download
+
+Get the installer from [Releases](https://github.com/pradhankukiran/winference/releases):
+
+- **Latest build** is rebuilt on every push to `main`.
+- Version releases (for example `v1.0.1`) are made by pushing a `v*.*.*` tag.
+
+The installer is unsigned. On the SmartScreen warning, choose **More info**, then **Run anyway**.
+
 ## Requirements
 
 - Windows 11 22H2 or later, x64

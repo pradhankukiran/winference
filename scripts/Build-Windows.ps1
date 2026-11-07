@@ -7,6 +7,8 @@ param(
     # Publishes, then builds the Inno Setup installer (implies -Publish).
     [switch]$Installer,
     [string]$InnoCompilerPath = '',
+    # Overrides <Version> from the app project, for example 1.0.0.42 for a CI build.
+    [string]$Version = '',
     [switch]$UpdateLockFile,
     [string]$OutputDirectory = 'artifacts\win-x64'
 )
@@ -23,6 +25,9 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_GENERATE_ASPNET_CERTIFICATE = 'false'
 
 if ($Installer) { $Publish = $true }
+if ($Version -and $Version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
+    throw "Version '$Version' must look like 1.2.3 or 1.2.3.4."
+}
 
 Push-Location $projectRoot
 try {
@@ -33,8 +38,10 @@ try {
 
     if ($Publish) {
         $destination = Join-Path $projectRoot $OutputDirectory
-        & $dotnetExecutable publish $projectPath '-c' $Configuration '-r' 'win-x64' `
-            '-p:Platform=x64' '--self-contained' 'true' '--no-restore' '-o' $destination
+        $publishArguments = @('publish', $projectPath, '-c', $Configuration, '-r', 'win-x64',
+            '-p:Platform=x64', '--self-contained', 'true', '--no-restore', '-o', $destination)
+        if ($Version) { $publishArguments += "-p:Version=$Version" }
+        & $dotnetExecutable @publishArguments
         if ($LASTEXITCODE -ne 0) { throw 'Windows publish failed.' }
         if (-not (Test-Path (Join-Path $destination 'Winference.pri'))) {
             throw 'Windows publish is missing the compiled application resources (Winference.pri).'
@@ -52,8 +59,11 @@ try {
             if (-not $InnoCompilerPath -or -not (Test-Path $InnoCompilerPath)) {
                 throw 'Inno Setup 6 (ISCC.exe) was not found. Install it or pass -InnoCompilerPath.'
             }
-            [xml]$project = Get-Content $projectPath
-            $version = @($project.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ })[0]
+            $version = $Version
+            if (-not $version) {
+                [xml]$project = Get-Content $projectPath
+                $version = @($project.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ })[0]
+            }
             if (-not $version) { throw 'The app project has no <Version>.' }
             $installerOutput = Join-Path $projectRoot 'artifacts\installer'
             & $InnoCompilerPath '/Q' "/DAppVersion=$version" "/DSourceDir=$destination" "/DOutputDir=$installerOutput" `

@@ -3,6 +3,7 @@ using System.Text;
 using Winference.Core.Discover;
 using Winference.Core.Models;
 using Winference.Infrastructure.Discover;
+using Winference.Infrastructure.Selection;
 using Winference.Infrastructure.Setup;
 
 namespace Winference.Tests;
@@ -223,6 +224,27 @@ public class DiscoverTests
     public void Small_files_are_checked_with_their_git_fingerprint() =>
         // `git hash-object` of a file containing "hello\n".
         Assert.Equal("ce013625030ba8dba906f756967f9e9ca394464a", HybridModelDownloadService.GitBlobSha1(Encoding.UTF8.GetBytes("hello\n")));
+
+    [Fact]
+    public void Measured_speed_follows_recent_replies_and_survives_a_restart()
+    {
+        var root = Directory.CreateTempSubdirectory("winference-speed-").FullName;
+        try
+        {
+            var store = new ModelSpeedStore(root);
+            store.Record("qwen3:0.6b", 80);
+            store.Record("qwen3:0.6b", 100);
+            store.Record("qwen3:0.6b", double.NaN);
+
+            var reopened = new ModelSpeedStore(root).Read("qwen3:0.6b");
+
+            Assert.NotNull(reopened);
+            Assert.Equal(90, reopened.TokensPerSecond);
+            Assert.Equal(2, reopened.Replies);
+            Assert.Null(store.Read("never-used"));
+        }
+        finally { Directory.Delete(root, true); }
+    }
 
     private static void CopyBundled(string app)
     {

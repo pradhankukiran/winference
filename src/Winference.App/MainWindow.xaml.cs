@@ -70,6 +70,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
         var hybridModels = new HybridModelService(_dataRoot);
         _hybridRuntime = new HybridRuntimeAcquisition(_dataRoot);
         var catalogs = new Winference.Infrastructure.Discover.CatalogRefreshService(_dataRoot);
+        var speeds = new ModelSpeedStore(_dataRoot);
         var modelLibrary = new ModelLibraryService(paths, _setupService, gpuModels, hybridModels, catalogs: catalogs);
         var activeSelection = new ActiveModelSelectionStore(_dataRoot);
         var activations = new ModelActivationFactory(_dataRoot, AppContext.BaseDirectory, gpuModels, _gpuRuntime,
@@ -91,12 +92,13 @@ public sealed partial class MainWindow : Window, IShellNavigator
         var features = new ChatFeatures(new Winference.Infrastructure.Chat.ConversationAttachmentStore(_dataRoot), tools,
             () => _preferences.Read().ToolsEnabled, ConfirmToolAsync, mediaSelection, ChatMessageViewModel.ImagesRoot,
             () => _preferences.Read().CustomInstructions,
-            () => Winference.Core.Runtime.ResponseStyles.TemperatureFor(_preferences.Read().ResponseStyle));
+            () => Winference.Core.Runtime.ResponseStyles.TemperatureFor(_preferences.Read().ResponseStyle),
+            speeds.Record);
         _session = new ModelSessionService(ViewModel, _conversations, activations, _setupService, gpuModels, _gpuRuntime,
             hybridModels, _hybridRuntime, activeSelection, conversationCatalog, queue, _dialogs, _lifetime, this, features);
         _library.Attach(_session);
         _modelsPage = new ModelsPage(_library);
-        _discoverPage = new DiscoverPage(new DiscoverViewModel(_library, catalogs, _lifetime));
+        _discoverPage = new DiscoverPage(new DiscoverViewModel(_library, catalogs, _lifetime, speeds));
         _modelsPage.DiscoverRequested += (_, _) => ShowShell(ShellPage.Discover);
         _welcomePage = new WelcomePage(_library);
         _welcomePage.AllModelsRequested += (_, _) => ShowShell(ShellPage.Discover);

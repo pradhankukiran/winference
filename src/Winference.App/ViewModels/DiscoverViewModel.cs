@@ -19,6 +19,7 @@ public sealed class DiscoverViewModel : INotifyPropertyChanged
     public static readonly TimeSpan AutoRefreshAge = TimeSpan.FromDays(1);
     private readonly ModelLibraryViewModel _library;
     private readonly CatalogRefreshService _catalogs;
+    private readonly Winference.Infrastructure.Selection.ModelSpeedStore? _speeds;
     private readonly AppLifetime _lifetime;
     private readonly Dictionary<string, DiscoverFamilyViewModel> _families = new(StringComparer.Ordinal);
     private string _query = string.Empty;
@@ -33,10 +34,12 @@ public sealed class DiscoverViewModel : INotifyPropertyChanged
     private string _communityMessage = string.Empty;
     private CancellationTokenSource? _communitySearch;
 
-    internal DiscoverViewModel(ModelLibraryViewModel library, CatalogRefreshService catalogs, AppLifetime lifetime)
+    internal DiscoverViewModel(ModelLibraryViewModel library, CatalogRefreshService catalogs, AppLifetime lifetime,
+        Winference.Infrastructure.Selection.ModelSpeedStore? speeds = null)
     {
         _library = library;
         _catalogs = catalogs;
+        _speeds = speeds;
         _lifetime = lifetime;
         _library.EntriesChanged += (_, _) => Rebuild();
         Rebuild();
@@ -213,7 +216,7 @@ public sealed class DiscoverViewModel : INotifyPropertyChanged
         foreach (var group in grouped)
         {
             if (!_families.TryGetValue(group.Key, out var family)) _families[group.Key] = family = new(group.Key);
-            family.Update(group.ToArray(), memory);
+            family.Update(group.ToArray(), memory, _speeds);
         }
         foreach (var stale in _families.Keys.Except(grouped.Select(group => group.Key)).ToArray()) _families.Remove(stale);
         if (_selected is not null && !_families.ContainsValue(_selected)) Selected = null;
@@ -297,7 +300,11 @@ public sealed class DiscoverFamilyViewModel(string key) : INotifyPropertyChanged
     public string SearchKey { get; private set; } = string.Empty;
 
     public string EnginesLabel => string.Join(" · ", Variants.Select(variant => variant.Badge).Distinct());
-    public string SizeLabel => SmallestBytes > 0 ? $"From {StorageCheck.Format(SmallestBytes)}" : string.Empty;
+    public string SizeLabel => string.Join(" · ", new[]
+    {
+        SmallestBytes > 0 ? $"From {StorageCheck.Format(SmallestBytes)}" : null,
+        Variants.Select(variant => variant.Speed?.TokensPerSecond).Max() is { } fastest ? $"{fastest:0} tokens/s" : null
+    }.Where(part => part is not null));
     public string FitLabel => IsOnThisPc ? "On this PC" : ModelFit.Label(BestFit);
     public string CapabilityLabel => string.Join(" · ", new[]
     {
@@ -309,7 +316,8 @@ public sealed class DiscoverFamilyViewModel(string key) : INotifyPropertyChanged
     public Visibility CapabilityVisibility => Capabilities == ModelCapabilities.None ? Visibility.Collapsed : Visibility.Visible;
     public string AutomationName => $"{Name}, runs on {EnginesLabel}, {FitLabel}";
 
-    internal void Update(IReadOnlyList<ModelEntryViewModel> entries, long memoryBytes)
+    internal void Update(IReadOnlyList<ModelEntryViewModel> entries, long memoryBytes,
+        Winference.Infrastructure.Selection.ModelSpeedStore? speeds = null)
     {
         var ordered = entries.OrderBy(entry => entry.Entry.Profile.ExecutionMode switch
             { ExecutionMode.NpuOnly => 0, ExecutionMode.GpuNpu => 1, _ => 2 })
@@ -319,7 +327,7 @@ public sealed class DiscoverFamilyViewModel(string key) : INotifyPropertyChanged
         foreach (var entry in ordered)
         {
             var variant = keep.GetValueOrDefault(entry) ?? new DiscoverVariantViewModel(entry);
-            variant.SetMemory(memoryBytes);
+            variant.SetMemory(memoryBytes, speeds?.Read(entry.RuntimeModelId));
             Variants.Add(variant);
         }
         // The shortest name is usually the cleanest, e.g. "Llama 3.2 1B" over "Llama 3.2 1B Instruct GGUF".
@@ -346,6 +354,7 @@ public sealed class DiscoverFamilyViewModel(string key) : INotifyPropertyChanged
 public sealed class DiscoverVariantViewModel : INotifyPropertyChanged
 {
     private long _memoryBytes;
+    private Winference.Infrastructure.Selection.MeasuredSpeed? _speed;
 
     internal DiscoverVariantViewModel(ModelEntryViewModel entry) => Entry = entry;
 
@@ -357,6 +366,9 @@ public sealed class DiscoverVariantViewModel : INotifyPropertyChanged
     public long SizeBytes => Entry.Entry.Profile.DownloadBytes is > 0 and var download ? download : Entry.Entry.Profile.StorageBytes ?? 0;
     public FitLevel Fit => ModelFit.Estimate(SizeBytes, _memoryBytes);
     public string TierLabel => Entry.Entry.Profile.Tier == CatalogTier.Tested ? "Tested" : "Community";
+
+    /// <summary>Measured on this PC from real replies; null until the model has written a few.</summary>
+    public Winference.Infrastructure.Selection.MeasuredSpeed? Speed => _speed;
 
     public string Note => Mode switch
     {
@@ -370,7 +382,8 @@ public sealed class DiscoverVariantViewModel : INotifyPropertyChanged
         TierLabel,
         Entry.Entry.Profile.Artifact.Quantization,
         SizeBytes > 0 ? StorageCheck.Format(SizeBytes) : null,
-        Entry.Entry.IsOnThisPc ? null : ModelFit.Label(Fit)
+        Entry.Entry.IsOnThisPc ? null : ModelFit.Label(Fit),
+        _speed is { } speed ? $"{speed.TokensPerSecond:0.#} tokens/s measured on this PC" : null
     }.Where(part => !string.IsNullOrWhiteSpace(part)));
 
     public string TechnicalDetails => string.Join(Environment.NewLine, new[]
@@ -385,9 +398,10 @@ public sealed class DiscoverVariantViewModel : INotifyPropertyChanged
         Entry.Entry.Profile.Evidence
     }.Where(line => !string.IsNullOrWhiteSpace(line)));
 
-    internal void SetMemory(long memoryBytes)
+    internal void SetMemory(long memoryBytes, Winference.Infrastructure.Selection.MeasuredSpeed? speed = null)
     {
         _memoryBytes = memoryBytes;
+        _speed = speed;
         PropertyChanged?.Invoke(this, new(string.Empty));
     }
 }

@@ -756,7 +756,12 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
                 if (!Current()) return;
                 if (firstToken is { } first && terminal?.Kind == GenerationEventKind.Completed)
+                {
                     assistantTurn.Stats = ReplyStats.Describe(usage, deltas, clock.Elapsed - first, first, _broker.Snapshot.Session);
+                    // Short replies time poorly, so only longer ones count towards the model's measured speed.
+                    if ((usage?.CompletionTokens ?? deltas) >= 32 && ReplyStats.Rate(usage, deltas, clock.Elapsed - first) is { } rate)
+                        _features?.RecordSpeed?.Invoke(_modelId, rate);
+                }
                 // A tool request ends this round. Its result goes back to the model as the next message.
                 if (!toolsOn || terminal?.Kind != GenerationEventKind.Completed) break;
                 var call = round < MaxToolRounds ? _features!.Tools.ParseToolCall(reply.ToString()) : null;
@@ -1489,7 +1494,8 @@ public sealed record ChatFeatures(
     Winference.App.Services.MediaSelection? Media = null,
     string ImagesRoot = "",
     Func<string>? CustomInstructions = null,
-    Func<double>? ResponseTemperature = null)
+    Func<double>? ResponseTemperature = null,
+    Action<string, double>? RecordSpeed = null)
 {
     public string Instructions() => CustomInstructions?.Invoke() ?? string.Empty;
     public double Temperature() => ResponseTemperature?.Invoke() ?? ResponseStyles.DefaultTemperature;
@@ -1498,10 +1504,18 @@ public sealed record ChatFeatures(
 /// <summary>A short line under a reply: speed, engine and hardware.</summary>
 public static class ReplyStats
 {
-    public static string Describe(GenerationUsage? usage, int deltas, TimeSpan writing, TimeSpan waiting, RuntimeSession? session)
+    /// <summary>Writing speed after the first word, in tokens per second.</summary>
+    public static double? Rate(GenerationUsage? usage, int deltas, TimeSpan writing)
     {
         var tokens = usage?.CompletionTokens ?? deltas;
         var speed = usage?.DecodeTokensPerSecond ?? (writing.TotalSeconds > 0.05 && tokens > 1 ? (tokens - 1) / writing.TotalSeconds : (double?)null);
+        return speed is { } value && double.IsFinite(value) && value > 0 ? value : null;
+    }
+
+    public static string Describe(GenerationUsage? usage, int deltas, TimeSpan writing, TimeSpan waiting, RuntimeSession? session)
+    {
+        var tokens = usage?.CompletionTokens ?? deltas;
+        var speed = Rate(usage, deltas, writing);
         var parts = new List<string>();
         if (speed is { } value && double.IsFinite(value) && value > 0) parts.Add($"{value:0.#} tokens/s");
         parts.Add($"{tokens} tokens");

@@ -80,6 +80,12 @@
                                 <TextBlock Text="{Binding SpeakerLabel}" Style="{StaticResource WinferenceCaptionStyle}" Visibility="{Binding LabelVisibility}" />
                                 <Image Source="{Binding ImageSource}" Visibility="{Binding ImageVisibility}" MaxWidth="512" MaxHeight="512"
                                        HorizontalAlignment="Left" Stretch="Uniform" AutomationProperties.Name="Generated image" />
+                                <Expander Header="Thinking" Visibility="{Binding ReasoningVisibility}" IsExpanded="False"
+                                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" MaxWidth="{Binding ContentMaxWidth}"
+                                          AutomationProperties.AutomationId="ReplyThinking" AutomationProperties.Name="Model's thinking">
+                                    <TextBlock Text="{Binding Reasoning}" Style="{StaticResource WinferenceCaptionStyle}"
+                                               TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                                </Expander>
                                 <controls:MessageContent Text="{Binding DisplayText}" IsUser="{Binding IsUser}"
                                                          HorizontalAlignment="{Binding Alignment}" MaxWidth="{Binding ContentMaxWidth}" />
                                 <TextBlock Text="{Binding Status}" Style="{StaticResource WinferenceCaptionStyle}" HorizontalAlignment="{Binding Alignment}"

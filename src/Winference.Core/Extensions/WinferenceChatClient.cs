@@ -126,6 +126,7 @@ public sealed class WinferenceChatClient : IWinferenceChatClient
         var maxTokens = options?.MaxOutputTokens ?? _profile.MaxOutputTokens;
         await foreach (var item in _broker.GenerateAsync(messages, maxTokens, cancellationToken).ConfigureAwait(false))
         {
+            if (item.Kind == GenerationEventKind.ReasoningDelta) continue;
             yield return new ClientStreamingUpdate(
                 Text: item.Text,
                 Role: item.Kind == GenerationEventKind.TextDelta ? "assistant" : null,

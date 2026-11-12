@@ -146,6 +146,7 @@ public sealed class ChatMessageViewModel(ChatSpeaker speaker, string text = "") 
     private bool _isLatestReply;
     private bool _canEdit;
     private string _stats = string.Empty;
+    private string _reasoning = string.Empty;
 
     /// <summary>The newest reply, when it can be regenerated.</summary>
     public bool IsLatestReply
@@ -159,6 +160,15 @@ public sealed class ChatMessageViewModel(ChatSpeaker speaker, string text = "") 
         get => _canEdit;
         set { if (_canEdit == value) return; _canEdit = value; OnPropertyChanged(); OnPropertyChanged(nameof(EditVisibility)); }
     }
+
+    /// <summary>A thinking model's working before its answer. Shown collapsed, for replies written in this session only.</summary>
+    public string Reasoning
+    {
+        get => _reasoning;
+        set { if (_reasoning == value) return; _reasoning = value ?? string.Empty; OnPropertyChanged(); OnPropertyChanged(nameof(ReasoningVisibility)); }
+    }
+
+    public Visibility ReasoningVisibility => _reasoning.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>Speed and hardware for this reply. Shown for replies written in this session only.</summary>
     public string Stats

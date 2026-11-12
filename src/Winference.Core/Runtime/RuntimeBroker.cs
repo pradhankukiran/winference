@@ -132,6 +132,10 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
         finally { Finish(operation); }
     }
 
+    /// <summary>
+    /// Streams one reply. With no <paramref name="maxOutputTokens"/>, the profile's limit is the
+    /// guaranteed room and the backend may let the reply use the rest of the context.
+    /// </summary>
     public async IAsyncEnumerable<GenerationEvent> GenerateAsync(
         IReadOnlyList<ChatMessage> messages,
         int? maxOutputTokens = null,
@@ -153,7 +157,8 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
                 throw new RuntimeException("NotReady", "The model is not ready. Load it again before sending a message.");
             var outputLimit = maxOutputTokens ?? session.Profile.MaxOutputTokens;
             var copiedMessages = ValidateMessages(messages, outputLimit, session.Profile);
-            request = new GenerationRequest(Guid.NewGuid(), session.Revision, session.Profile.ProfileId, copiedMessages, outputLimit, temperature);
+            request = new GenerationRequest(Guid.NewGuid(), session.Revision, session.Profile.ProfileId, copiedMessages, outputLimit, temperature,
+                UseRemainingContext: maxOutputTokens is null);
             operation = new ActiveOperation(_revision, cancellationToken);
             _active = operation;
             generating = SetSnapshot(RuntimeState.Generating, "Writing reply…", session);
@@ -255,7 +260,7 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
                     receivedTerminal = item;
                     break;
                 }
-                if (!Enum.IsDefined(item.Kind) || (item.Kind == GenerationEventKind.TextDelta && item.Text is null))
+                if (!Enum.IsDefined(item.Kind) || (item.Kind is GenerationEventKind.TextDelta or GenerationEventKind.ReasoningDelta && item.Text is null))
                     throw new RuntimeException("InvalidStream", "The model returned an invalid reply. Try loading the model again.");
                 await writer.WriteAsync(item, operation.Cancellation.Token).ConfigureAwait(false);
             }

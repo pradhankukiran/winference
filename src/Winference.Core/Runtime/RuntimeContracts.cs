@@ -70,7 +70,8 @@ public sealed record GenerationRequest(
     string ProfileId,
     IReadOnlyList<ChatMessage> Messages,
     int MaxOutputTokens,
-    double Temperature = ResponseStyles.DefaultTemperature);
+    double Temperature = ResponseStyles.DefaultTemperature,
+    bool UseRemainingContext = false);
 
 /// <summary>Named sampling temperatures offered as response styles.</summary>
 public static class ResponseStyles
@@ -87,7 +88,8 @@ public static class ResponseStyles
         All.FirstOrDefault(style => style.Id == id) is { Id: not null } style ? style.Temperature : DefaultTemperature;
 }
 
-public enum GenerationEventKind { TextDelta, Usage, Completed, Cancelled, Failed }
+/// <summary>ReasoningDelta is a thinking model's working, sent before its answer. It is never part of the answer text.</summary>
+public enum GenerationEventKind { TextDelta, Usage, Completed, Cancelled, Failed, ReasoningDelta }
 
 public sealed record GenerationUsage(int? PromptTokens = null, int? CompletionTokens = null, double? DecodeTokensPerSecond = null);
 

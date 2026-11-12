@@ -14,6 +14,8 @@ namespace Winference.Infrastructure.Lemonade;
 /// Never connects to, unloads, or terminates an external server.</summary>
 public sealed class LemonadeBackend(RuntimeInstallation installation) : IRuntimeBackend
 {
+    /// <summary>Tokens left unused when a reply may fill the context, covering small template differences.</summary>
+    private const int ReplyMargin = 32;
     private OwnedProcessSession? _owned;
     private HttpClient? _http;
     private RuntimeSession? _session;
@@ -160,6 +162,7 @@ public sealed class LemonadeBackend(RuntimeInstallation installation) : IRuntime
             request.ProfileId != session.Profile.ProfileId || request.SessionRevision != session.Revision || _owned is null || _owned.HasExited)
             throw new RuntimeException("stale_session", "The AI session changed. Load the model again before sending.");
         _contextBudget?.Validate(request.Messages, request.MaxOutputTokens, session.EffectiveContextLength);
+        var maxTokens = ReplyLimit(request, session.EffectiveContextLength);
         // Recheck the served route and owned processes before every request.
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(120));
@@ -171,7 +174,7 @@ public sealed class LemonadeBackend(RuntimeInstallation installation) : IRuntime
             {
                 model = session.Profile.ProviderModelId,
                 messages = request.Messages.Select(ToWire),
-                stream = true, max_tokens = request.MaxOutputTokens, temperature = request.Temperature,
+                stream = true, max_tokens = maxTokens, temperature = request.Temperature,
                 stream_options = new { include_usage = true }
             })
         };
@@ -181,6 +184,18 @@ public sealed class LemonadeBackend(RuntimeInstallation installation) : IRuntime
             throw new RuntimeException("stream_format", "The AI server returned an unexpected reply format.");
         await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token).ConfigureAwait(false);
         await foreach (var item in CompletionStreamReader.ReadAsync(stream, deadline.Token).ConfigureAwait(false)) yield return item;
+    }
+
+    /// <summary>
+    /// The profile's limit, or everything the prompt leaves free when the request allows it.
+    /// Without the model's tokenizer the prompt size is unknown, so the profile's limit is kept.
+    /// </summary>
+    private int ReplyLimit(GenerationRequest request, int contextLength)
+    {
+        if (!request.UseRemainingContext || _contextBudget is null) return request.MaxOutputTokens;
+        var images = request.Messages.Sum(message => message.Images?.Count ?? 0);
+        var prompt = (long)_contextBudget.CountPromptTokens(request.Messages) + images * (long)ChatImage.TokenBudget;
+        return (int)Math.Max(request.MaxOutputTokens, contextLength - prompt - ReplyMargin);
     }
 
     /// <summary>Plain text, or OpenAI content parts (text, then images as data URLs) for a vision model.</summary>

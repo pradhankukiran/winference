@@ -724,7 +724,8 @@ public sealed class ChatViewModel : INotifyPropertyChanged
                 var deltas = 0;
                 GenerationUsage? usage = null;
                 var temperature = _features?.Temperature() ?? ResponseStyles.DefaultTemperature;
-                await foreach (var item in _broker.GenerateAsync(messages, _profile.MaxOutputTokens, cancellationToken, temperature))
+                // No fixed cap: the profile's limit is kept free, and the reply may use the rest of the context.
+                await foreach (var item in _broker.GenerateAsync(messages, null, cancellationToken, temperature))
                 {
                     if (!Current()) break;
                     switch (item.Kind)
@@ -735,6 +736,11 @@ public sealed class ChatViewModel : INotifyPropertyChanged
                             deltas++;
                             reply.Append(item.Text);
                             assistantTurn.Text += item.Text ?? string.Empty;
+                            break;
+                        case GenerationEventKind.ReasoningDelta:
+                            firstToken ??= clock.Elapsed;
+                            deltas++;
+                            assistantTurn.Reasoning += item.Text ?? string.Empty;
                             break;
                         case GenerationEventKind.Usage:
                             usage = item.Usage;

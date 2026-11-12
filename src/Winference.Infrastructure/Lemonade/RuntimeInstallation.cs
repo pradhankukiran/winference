@@ -39,9 +39,15 @@ public sealed class RuntimeInstallation
         ModelRoot = Path.GetFullPath(modelRoot); SessionsRoot = Path.GetFullPath(sessionsRoot);
         Profile = new ModelProfile(Get("modelFamilyId"), Get("profileId"), Get("artifactId"),
             Get("providerModelId"), ExecutionMode.NpuOnly, _manifest.GetProperty("contextLength").GetInt32(),
-            _manifest.GetProperty("maxOutputTokens").GetInt32(),
+            ReplyReserve(_manifest.GetProperty("contextLength").GetInt32()),
             SupportsImages: _manifest.TryGetProperty("supportsImages", out var images) && images.ValueKind == JsonValueKind.True);
     }
+
+    /// <summary>
+    /// Room always kept free for a reply. A reply may use more when the conversation leaves it.
+    /// Older manifests saved a 256-token cap; it is replaced here so they need no rewrite.
+    /// </summary>
+    public static int ReplyReserve(int contextLength) => Math.Min(512, contextLength / 4);
 
     public async Task<RuntimeAvailability> VerifyAsync(ModelProfile profile, CancellationToken cancellationToken)
     {

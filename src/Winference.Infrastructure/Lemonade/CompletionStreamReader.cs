@@ -141,6 +141,17 @@ public static class CompletionStreamReader
                             (tools.ValueKind != JsonValueKind.Array || tools.GetArrayLength() > 0)) throw UnsupportedReply();
                         if (delta.TryGetProperty("function_call", out var function) && function.ValueKind != JsonValueKind.Null)
                             throw UnsupportedReply();
+                        // Thinking models stream their working first, as reasoning_content (FastFlowLM and llama-server).
+                        if (delta.TryGetProperty("reasoning_content", out var reasoning) && reasoning.ValueKind is not JsonValueKind.Null)
+                        {
+                            if (reasoning.ValueKind != JsonValueKind.String) throw InvalidPayload();
+                            var thought = reasoning.GetString();
+                            if (!string.IsNullOrEmpty(thought))
+                            {
+                                if (finishReason is not null) throw InvalidPayload();
+                                events.Add(new(GenerationEventKind.ReasoningDelta, Text: thought));
+                            }
+                        }
                         if (delta.TryGetProperty("content", out var content) && content.ValueKind is not JsonValueKind.Null)
                         {
                             if (content.ValueKind != JsonValueKind.String) throw InvalidPayload();
@@ -157,6 +168,9 @@ public static class CompletionStreamReader
                         if (finish.ValueKind != JsonValueKind.String) throw InvalidPayload();
                         var reason = finish.GetString();
                         if (finishReason is not null && finishReason != reason) throw InvalidPayload();
+                        // FastFlowLM ends a failed or cancelled reply with these reasons instead of an error event.
+                        if (reason is "error" or "cancel")
+                            throw ProtocolError("stream_error", "The AI engine stopped before finishing the reply. Try again.");
                         if (reason is not ("stop" or "length")) throw UnsupportedReply();
                         finishReason = reason;
                     }

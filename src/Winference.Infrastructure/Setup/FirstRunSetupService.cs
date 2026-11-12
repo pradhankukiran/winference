@@ -264,7 +264,7 @@ public sealed class FirstRunSetupService : ISetupService
         {
             schemaVersion = 1, modelFamilyId = model.Id, profileId = profile, artifactId = "sha256:" + identity,
             providerModelId = model.ProviderId, checkpoint = model.Id, executionMode = "NpuOnly", contextLength = context,
-            maxOutputTokens = Math.Min(256, context / 4), modelDirectory = model.DirectoryName, modelFiles = files,
+            maxOutputTokens = RuntimeInstallation.ReplyReserve(context), modelDirectory = model.DirectoryName, modelFiles = files,
             flmVersion = PinnedRuntimeAcquisition.FlmVersion, flmExecutableSha256 = await PinnedRuntimeAcquisition.HashAsync(runtime, token).ConfigureAwait(false),
             lemonadeVersion = PinnedRuntimeAcquisition.LemonadeVersion, lemonadeExecutableSha256 = PinnedRuntimeAcquisition.LemonadeExeSha256,
             modelName = model.DisplayName, publisher = model.Publisher, supportsImages = model.SupportsImages,

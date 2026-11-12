@@ -240,7 +240,7 @@ public sealed class OdsGpuBackend(
             record.Port != _port || record.ModelId != profile.ProviderModelId ||
             !SamePath(record.ModelPath, registration.ModelPath) || record.ModelSha256 != registration.Sha256 ||
             record.ModelLengthBytes != registration.LengthBytes || !SamePath(record.ExecutablePath, runtime.ExecutablePath) ||
-            record.ReleaseTag != runtime.ReleaseTag || record.Build != 9014 ||
+            record.ReleaseTag != runtime.ReleaseTag || record.Build != GpuRuntimeAcquisition.Build ||
             record.ContextSize != profile.ContextLength || record.RuntimeContext < profile.ContextLength ||
             record.RuntimeContext - profile.ContextLength >= 256 ||
             record.OffloadedLayers <= 0 || record.OffloadedLayers != record.TotalLayers ||

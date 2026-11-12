@@ -19,7 +19,7 @@ namespace Winference.Infrastructure.Lemonade;
 public sealed class LemonadeMediaService : IAsyncDisposable
 {
     public static readonly TimeSpan IdleStop = TimeSpan.FromMinutes(5);
-    private const string Version = "2026.42.1";
+    private const string Version = PinnedRuntimeAcquisition.LemonadeVersion;
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     private readonly string _lemonadePath;

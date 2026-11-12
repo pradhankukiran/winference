@@ -10,7 +10,7 @@ public sealed record SetupPaths(
 {
     public string SettingsPath => Path.Combine(DataRoot, "setup.json");
     public string DefaultModelStore => Path.Combine(DataRoot, "Models", "flm");
-    public string RuntimeDirectory => Path.Combine(DataRoot, "Runtimes", "fastflowlm-1.0.10");
+    public string RuntimeDirectory => Path.Combine(DataRoot, "Runtimes", "fastflowlm-" + PinnedRuntimeAcquisition.FlmVersion);
     public string SessionsRoot => Path.Combine(DataRoot, "Sessions");
 
     public static SetupPaths CreateDefault()

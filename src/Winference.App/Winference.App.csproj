@@ -29,14 +29,14 @@
     <Content Include="Assets\Winference.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <ProjectReference Include="..\Winference.Core\Winference.Core.csproj" />
     <ProjectReference Include="..\Winference.Infrastructure\Winference.Infrastructure.csproj" />
-    <Content Include="..\..\config\catalogs\flm-1.0.10.json" Link="Catalogs\catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\..\config\catalogs\flm-1.0.10-model-info.json" Link="Catalogs\files.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\config\catalogs\flm-1.0.12.json" Link="Catalogs\catalog.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\config\catalogs\flm-1.0.12-model-info.json" Link="Catalogs\files.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\config\catalogs\gpu-approved-1.json" Link="Catalogs\gpu-approved.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\config\model-profiles\conversation-compatibility.json" Link="Catalogs\conversation-compatibility.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\config\model-profiles\qwen2.5-0.5b-ryzenai-hybrid.json" Link="Profiles\hybrid_qwen_small.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\config\model-profiles\llama-3.2-1b-ryzenai-hybrid.json" Link="Profiles\hybrid_llama_small.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\config\catalogs\LICENSE-FastFlowLM.txt" Link="ThirdParty\FastFlowLM-catalog\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\..\external\lemonade\2026.42.1\**\*" Link="Runtimes\Lemonade\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\external\lemonade\2026.46.2\**\*" Link="Runtimes\Lemonade\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\external\ods\windows\*.ps1" Link="Runtimes\OdsHelpers\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\Winference.Infrastructure\Ods\Invoke-GpuRuntime.ps1" Link="Runtimes\OdsHelpers\Invoke-GpuRuntime.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\external\ods\LICENSE" Link="ThirdParty\ODS\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

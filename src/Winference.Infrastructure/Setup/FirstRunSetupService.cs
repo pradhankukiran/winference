@@ -154,8 +154,8 @@ public sealed class FirstRunSetupService : ISetupService
                     root.GetProperty("setupRuntimePath").GetString() != saved.FlmPath ||
                     root.GetProperty("setupModelRoot").GetString() != saved.ModelRoot ||
                     root.GetProperty("lemonadeExecutableSha256").GetString() != PinnedRuntimeAcquisition.LemonadeExeSha256 ||
-                    root.GetProperty("lemonadeVersion").GetString() != "2026.42.1" ||
-                    flmHash is not (PinnedRuntimeAcquisition.InstalledExeSha256 or PinnedRuntimeAcquisition.PortableExeSha256))
+                    root.GetProperty("lemonadeVersion").GetString() != PinnedRuntimeAcquisition.LemonadeVersion ||
+                    flmHash != PinnedRuntimeAcquisition.PortableExeSha256)
                     throw new RuntimeException("setup_identity", "The saved model selection and its verified files do not match. Choose your model again.");
                 var files = root.GetProperty("modelFiles").Deserialize<VerifiedModelFile[]>(AtomicJson.Options);
                 if (files is null || files.Length != model.Files.Count || files.Any(file => file is null) ||
@@ -258,15 +258,15 @@ public sealed class FirstRunSetupService : ISetupService
         if (!File.Exists(_paths.LemonadePath) || await PinnedRuntimeAcquisition.HashAsync(_paths.LemonadePath, token).ConfigureAwait(false) != PinnedRuntimeAcquisition.LemonadeExeSha256)
             throw new RuntimeException("missing_runtime", "The bundled AI supervisor is missing or changed. Restore the full Winference application folder.");
         var identity = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(files, AtomicJson.Options)));
-        var profile = model.Id.Replace(':', '-') + "-flm1.0.10-npu-ctx" + context + "-" + identity[..12];
+        var profile = model.Id.Replace(':', '-') + "-flm" + PinnedRuntimeAcquisition.FlmVersion + "-npu-ctx" + context + "-" + identity[..12];
         var path = Path.Combine(_paths.DataRoot, "Manifests", profile, "model.json");
         var manifest = new
         {
             schemaVersion = 1, modelFamilyId = model.Id, profileId = profile, artifactId = "sha256:" + identity,
             providerModelId = model.ProviderId, checkpoint = model.Id, executionMode = "NpuOnly", contextLength = context,
             maxOutputTokens = Math.Min(256, context / 4), modelDirectory = model.DirectoryName, modelFiles = files,
-            flmVersion = "1.0.10", flmExecutableSha256 = await PinnedRuntimeAcquisition.HashAsync(runtime, token).ConfigureAwait(false),
-            lemonadeVersion = "2026.42.1", lemonadeExecutableSha256 = PinnedRuntimeAcquisition.LemonadeExeSha256,
+            flmVersion = PinnedRuntimeAcquisition.FlmVersion, flmExecutableSha256 = await PinnedRuntimeAcquisition.HashAsync(runtime, token).ConfigureAwait(false),
+            lemonadeVersion = PinnedRuntimeAcquisition.LemonadeVersion, lemonadeExecutableSha256 = PinnedRuntimeAcquisition.LemonadeExeSha256,
             modelName = model.DisplayName, publisher = model.Publisher, supportsImages = model.SupportsImages,
             tokenizerPolicy = files.Any(f => string.Equals(f.Name, "tokenizer.json", StringComparison.OrdinalIgnoreCase)) ? "local-exact" : "estimate",
             catalogRevision = FlmModelCatalog.Revision,

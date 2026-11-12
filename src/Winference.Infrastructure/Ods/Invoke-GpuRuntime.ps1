@@ -17,8 +17,8 @@ try {
     $request = Read-ODSNativeLlamaJson $RequestPath
     $sessionDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($RequestPath))
     if ($request.schemaVersion -ne 1 -or [string]$request.sessionId -cnotmatch '^[0-9a-f]{32}$' -or
-        [string]$request.releaseTag -cne 'b9014' -or
-        [string]$request.archiveSha256 -cne '6cd4bc7a44256e674458b0c5ea2ae3461dca29ee87876c8d410ecc78652a3b0f' -or
+        [string]$request.releaseTag -cne 'b12109' -or
+        [string]$request.archiveSha256 -cne 'ed1d85207f58a292b5e9b9b529ecd4439bb8a60c5460dab0c137ef94d4322f2a' -or
         [string]$request.modelSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         [long]$request.modelLengthBytes -le 0 -or [int]$request.contextSize -lt 256 -or [int]$request.contextSize -gt 131072 -or
         [int]$request.port -lt 1 -or [int]$request.port -gt 65535) { throw 'The GPU launch request is invalid.' }
@@ -41,7 +41,7 @@ try {
     }
 
     $stage = 'device'
-    $qualification = Test-ODSNativeLlamaQualification -ExecutablePath ([string]$request.executablePath) -ExpectedBuild 9014 -Backend 'vulkan' -Architecture 'x64'
+    $qualification = Test-ODSNativeLlamaQualification -ExecutablePath ([string]$request.executablePath) -ExpectedBuild 12109 -Backend 'vulkan' -Architecture 'x64'
     $adapters = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | Where-Object {
         [string]$_.PNPDeviceID -match '^PCI\\VEN_1002&' -and [string]$_.Name -match '(?i)radeon|amd'
     })
@@ -109,6 +109,8 @@ try {
     $start.WorkingDirectory = Split-Path -Parent $plan.ExecutablePath
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
+    # Newer llama.cpp logs layer placement ("offloaded N/N layers to GPU") only at verbosity 4.
+    $start.EnvironmentVariables['LLAMA_ARG_LOG_VERBOSITY'] = '4'
     $child = [Diagnostics.Process]::Start($start)
     $null = $child.Handle
     Wait-ODSNativeLlamaStartup -Port $plan.Port -Process $child -TimeoutSeconds 150 -Backend 'vulkan' -Architecture 'x64'

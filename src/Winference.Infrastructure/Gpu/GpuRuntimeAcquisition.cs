@@ -10,15 +10,16 @@ namespace Winference.Infrastructure.Gpu;
 
 /// <summary>
 /// Implements explicit app-owned acquisition. Construction/inspection never download or execute a runtime.
-/// The pin is copied from ODS ods/config/backends/amd.json at revision 72e59cdc665fc576d300061cabb5b980cbbaf1da.
+/// The pin is llama.cpp b12109, the Vulkan build on Lemonade's main branch in November 2026.
 /// Publication manifest uses the retained ODS standalone helper's pin.json schema 1.
 /// </summary>
 public sealed class GpuRuntimeAcquisition
 {
-    public const string ReleaseTag = "b9014";
-    public const string AssetName = "llama-b9014-bin-win-vulkan-x64.zip";
-    public const string ArchiveSha256 = "6cd4bc7a44256e674458b0c5ea2ae3461dca29ee87876c8d410ecc78652a3b0f";
-    public const long ArchiveBytes = 33_541_404;
+    public const string ReleaseTag = "b12109";
+    public const int Build = 12109;
+    public const string AssetName = "llama-b12109-bin-win-vulkan-x64.zip";
+    public const string ArchiveSha256 = "ed1d85207f58a292b5e9b9b529ecd4439bb8a60c5460dab0c137ef94d4322f2a";
+    public const long ArchiveBytes = 37_661_160;
     public static readonly Uri DownloadUri = new($"https://github.com/ggml-org/llama.cpp/releases/download/{ReleaseTag}/{AssetName}");
     private const long MaximumExtractedBytes = 1_000_000_000;
     private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)

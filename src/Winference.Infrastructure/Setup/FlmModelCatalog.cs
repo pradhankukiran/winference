@@ -18,7 +18,7 @@ public sealed record CatalogModel(string Id, string DirectoryName, string Displa
 
 public sealed class FlmModelCatalog
 {
-    public const string Revision = "FastFlowLM/v1.0.10";
+    public const string Revision = "FastFlowLM/v" + PinnedRuntimeAcquisition.FlmVersion;
     public IReadOnlyList<CatalogModel> Models { get; }
 
     private FlmModelCatalog(IReadOnlyList<CatalogModel> models) => Models = models;
@@ -27,8 +27,8 @@ public sealed class FlmModelCatalog
     {
         var catalogBytes = File.ReadAllBytes(catalogPath);
         var metadataBytes = File.ReadAllBytes(modelInfoPath);
-        if (Convert.ToHexStringLower(SHA256.HashData(catalogBytes)) != "6849fc3c7776b884c308b5373de5aa5230c648a2eb3051c4f9367341076b9090" ||
-            Convert.ToHexStringLower(SHA256.HashData(metadataBytes)) != "c116977e0c00a7e9b1f76c47ee93a152e25a2055bd1e7229544f46fb70b84e53")
+        if (Convert.ToHexStringLower(SHA256.HashData(catalogBytes)) != "6f0ed1c0a988e0dcd83d859c5de0b83584f1604198ceb7e46a1a7e807a87bb92" ||
+            Convert.ToHexStringLower(SHA256.HashData(metadataBytes)) != "650d1a7c48c7e4b946f39e77678eeeb4a1e9eb289bf2be113404db4232408d11")
             throw new RuntimeException("catalog_integrity", "The model catalog differs from this build's verified catalog. Restore the complete app folder.");
         using var catalog = JsonDocument.Parse(catalogBytes);
         using var metadata = JsonDocument.Parse(metadataBytes);
@@ -39,7 +39,9 @@ public sealed class FlmModelCatalog
             var entry = variant.Value;
             var labels = Strings(entry, "label");
             // Vision models can chat and also see pictures. Audio-input models aren't supported yet.
-            if (Bool(entry, "asr") || labels.Any(x => x is "single-turn" or "embeddings" or "transcription" or "chat-transcription") ||
+            // Decision models answer on their own endpoint, and speculative tags need a second (base) package.
+            if (Bool(entry, "asr") || labels.Any(x => x is "single-turn" or "embeddings" or "transcription" or "chat-transcription" or "decision") ||
+                entry.TryGetProperty("base_model", out _) ||
                 !Strings(entry, "supported_platforms").Contains("aie2p")) continue;
             var id = family.Name + ":" + variant.Name;
             var directory = String(entry, "name");
@@ -59,9 +61,9 @@ public sealed class FlmModelCatalog
                 { completeManifest = false; break; }
                 files.Add(new(filename, length, sha256, git));
             }
-            var minimum = String(entry, "flm_min_version") ?? "1.0.10";
+            var minimum = String(entry, "flm_min_version") ?? PinnedRuntimeAcquisition.FlmVersion;
             var reason = !completeManifest || files.Count == 0 ? "The catalog lacks a complete verified file list for this model." :
-                !Version.TryParse(minimum.TrimStart('v'), out var required) || required > new Version(1, 0, 10)
+                !Version.TryParse(minimum.TrimStart('v'), out var required) || required > Version.Parse(PinnedRuntimeAcquisition.FlmVersion)
                     ? "This model needs a newer AI component than this build supports." : null;
             var details = entry.TryGetProperty("details", out var foundDetails) ? foundDetails : default;
             var description = string.Join(" · ", new[] { String(details, "parameter_size"), String(details, "quantization_level"), Bool(entry, "vlm") ? "Sees images" : labels.Contains("reasoning") ? "Reasoning model" : "Text chat" }.Where(s => !string.IsNullOrEmpty(s)));

@@ -21,7 +21,7 @@ public sealed record MediaAddon(MediaKind Kind, string LemonadeModel, string Nam
 
 public static class MediaAddons
 {
-    /// <summary>Kept small on purpose. Every entry was checked against Lemonade 2026.42.1's registry.</summary>
+    /// <summary>Kept small on purpose. Every entry was checked against Lemonade 2026.46.2's registry.</summary>
     public static IReadOnlyList<MediaAddon> All { get; } =
     [
         Whisper("Whisper-Base", "Whisper Base", "Fast speech recognition. Runs on the NPU when available.", 0.148, "base", isDefault: true),

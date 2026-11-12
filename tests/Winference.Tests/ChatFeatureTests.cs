@@ -512,7 +512,7 @@ public sealed class VisionTests
         Assert.NotNull(directory);
         var catalogs = Path.Combine(directory.FullName, "config", "catalogs");
         var catalog = Winference.Infrastructure.Setup.FlmModelCatalog.Load(
-            Path.Combine(catalogs, "flm-1.0.10.json"), Path.Combine(catalogs, "flm-1.0.10-model-info.json"));
+            Path.Combine(catalogs, "flm-1.0.12.json"), Path.Combine(catalogs, "flm-1.0.12-model-info.json"));
         var vision = catalog.Models.Where(model => model.SupportsImages).Select(model => model.DisplayName).ToArray();
         Assert.Contains(vision, name => name.Contains("VL", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(vision, name => name.Contains("MiniCPM-V", StringComparison.OrdinalIgnoreCase));

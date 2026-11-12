@@ -103,7 +103,7 @@ public sealed class LemonadeBackend(RuntimeInstallation installation) : IRuntime
             using (await PostJsonAsync("load", new { model_name = profile.ProviderModelId, ctx_size = profile.ContextLength }, token).ConfigureAwait(false)) { }
             using var loaded = await GetJsonAsync("health", token).ConfigureAwait(false);
             var proof = ProveReady(loaded.RootElement, profile, port);
-            _session = new RuntimeSession(sessionId, 0, profile, endpoint, "FastFlowLM 1.0.10", "AMD NPU",
+            _session = new RuntimeSession(sessionId, 0, profile, endpoint, "FastFlowLM " + Setup.PinnedRuntimeAcquisition.FlmVersion, "AMD NPU",
                 profile.ContextLength, proof);
             return _session;
         }

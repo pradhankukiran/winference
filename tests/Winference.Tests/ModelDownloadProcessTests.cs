@@ -35,8 +35,8 @@ public class ModelDownloadProcessTests
         if (Environment.GetEnvironmentVariable("WINFERENCE_REAL_FLM_ROOT") is not { Length: > 0 } root) return;
         var repository = Environment.GetEnvironmentVariable("WINFERENCE_REPOSITORY_ROOT")!;
         var paths = new SetupPaths(root, string.Empty,
-            Path.Combine(repository, "config", "catalogs", "flm-1.0.10.json"),
-            Path.Combine(repository, "config", "catalogs", "flm-1.0.10-model-info.json"),
+            Path.Combine(repository, "config", "catalogs", "flm-1.0.12.json"),
+            Path.Combine(repository, "config", "catalogs", "flm-1.0.12-model-info.json"),
             [Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "flm", "flm.exe")], []);
         var service = new FirstRunSetupService(paths, _ => Task.FromResult(
             new SetupHardware("test", "test", "test", 24L << 30, true, "test", null)));

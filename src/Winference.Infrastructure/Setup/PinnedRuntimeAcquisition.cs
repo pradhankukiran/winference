@@ -9,12 +9,13 @@ namespace Winference.Infrastructure.Setup;
 
 public static class PinnedRuntimeAcquisition
 {
-    public const long ArchiveBytes = 30_484_687;
-    public const string ArchiveSha256 = "a7063890d7b91037a07f381a396a0d7787ebdb69e1b03280971faf0a80f35b73";
-    public const string InstalledExeSha256 = "de83c3a34cc759e65e59831923e90205e799296bb277d38907b397c960573190";
-    public const string PortableExeSha256 = "f1edf82facc62978dd9a0ff10596303db3a444811aa34ea878e46bae817c300a";
-    public const string LemonadeExeSha256 = "2b2d227265cd3e3822f6af469403f421512d6c1d37df556d100ef4ca46945ea2";
-    public static readonly Uri DownloadUri = new("https://github.com/ROCm/FastFlowLM/releases/download/v1.0.10/fastflowlm_1.0.10_windows_amd64.zip");
+    public const string FlmVersion = "1.0.12";
+    public const string LemonadeVersion = "2026.46.2";
+    public const long ArchiveBytes = 36_831_834;
+    public const string ArchiveSha256 = "568706c537398d597f3f24b5094fc58e65126c56f118971f2910c26a86ae027c";
+    public const string PortableExeSha256 = "cc5cf9df58cb395ac02bacb2563ce669dead94e46454803f67bfbc9f16694296";
+    public const string LemonadeExeSha256 = "2858d59bf06fcae1144a14c59ce7a3e88b3e1ba34be297048d66484b048fe31d";
+    public static readonly Uri DownloadUri = new($"https://github.com/ROCm/FastFlowLM/releases/download/v{FlmVersion}/fastflowlm_{FlmVersion}_windows_amd64.zip");
 
     public static async Task<string?> FindTrustedRuntimeAsync(SetupPaths paths, CancellationToken token)
     {
@@ -25,9 +26,9 @@ public static class PinnedRuntimeAcquisition
             token.ThrowIfCancellationRequested();
             if (!File.Exists(path)) continue;
             var hash = await HashAsync(path, token).ConfigureAwait(false);
-            // A portable extraction is trusted only after its original archive
-            // digest and its own manifest have been checked below.
-            if (hash == InstalledExeSha256 || hash == PortableExeSha256 && await IsVerifiedPortableAsync(paths, path, hash, token).ConfigureAwait(false)) return Path.GetFullPath(path);
+            // Only the app-owned portable extraction is trusted, after its original
+            // archive digest and its own manifest have been checked below.
+            if (hash == PortableExeSha256 && await IsVerifiedPortableAsync(paths, path, hash, token).ConfigureAwait(false)) return Path.GetFullPath(path);
         }
         return null;
     }
@@ -38,7 +39,7 @@ public static class PinnedRuntimeAcquisition
         if (existing is not null) return existing;
         var downloadDirectory = Path.Combine(paths.DataRoot, "Downloads");
         Directory.CreateDirectory(downloadDirectory);
-        var archive = Path.Combine(downloadDirectory, "fastflowlm-1.0.10.zip");
+        var archive = Path.Combine(downloadDirectory, $"fastflowlm-{FlmVersion}.zip");
         await DownloadVerifiedAsync(client, DownloadUri, archive, ArchiveBytes, ArchiveSha256, progress, token).ConfigureAwait(false);
         var staging = paths.RuntimeDirectory + ".staging-" + Guid.NewGuid().ToString("N");
         Directory.CreateDirectory(staging);

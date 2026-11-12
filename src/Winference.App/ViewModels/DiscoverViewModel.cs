@@ -28,6 +28,10 @@ public sealed class DiscoverViewModel : INotifyPropertyChanged
     private bool _refreshing;
     private string? _problem;
     private DiscoverFamilyViewModel? _selected;
+    private CommunityRepositoryViewModel? _selectedRepository;
+    private bool _searchingCommunity;
+    private string _communityMessage = string.Empty;
+    private CancellationTokenSource? _communitySearch;
 
     internal DiscoverViewModel(ModelLibraryViewModel library, CatalogRefreshService catalogs, AppLifetime lifetime)
     {
@@ -46,15 +50,104 @@ public sealed class DiscoverViewModel : INotifyPropertyChanged
     public DiscoverFamilyViewModel? Selected
     {
         get => _selected;
-        set { if (_selected == value) return; _selected = value; Changed(); Changed(nameof(DetailVisibility)); }
+        set
+        {
+            if (_selected == value) return;
+            _selected = value;
+            if (value is not null) SelectedRepository = null;
+            Changed(); Changed(nameof(DetailVisibility));
+        }
     }
 
     public Visibility DetailVisibility => _selected is null ? Visibility.Collapsed : Visibility.Visible;
 
+    /// <summary>Community GGUF repositories from the last Hugging Face search.</summary>
+    public ObservableCollection<CommunityRepositoryViewModel> CommunityResults { get; } = [];
+    public bool IsSearchingCommunity { get => _searchingCommunity; private set { _searchingCommunity = value; Changed(); } }
+    public string CommunityMessage { get => _communityMessage; private set { _communityMessage = value; Changed(); } }
+    public Visibility CommunityVisibility => _query.Trim().Length >= 2 ? Visibility.Visible : Visibility.Collapsed;
+    public string CommunitySearchLabel => $"Search Hugging Face for \u201c{_query.Trim()}\u201d";
+
+    public CommunityRepositoryViewModel? SelectedRepository
+    {
+        get => _selectedRepository;
+        set
+        {
+            if (_selectedRepository == value) return;
+            _selectedRepository = value;
+            if (value is not null) Selected = null;
+            Changed(); Changed(nameof(RepositoryDetailVisibility));
+            if (value is { IsLoaded: false }) _ = LoadFilesAsync(value);
+        }
+    }
+
+    public Visibility RepositoryDetailVisibility => _selectedRepository is null ? Visibility.Collapsed : Visibility.Visible;
+
+    /// <summary>Searches only when asked, because the words are sent to Hugging Face.</summary>
+    public async Task SearchCommunityAsync()
+    {
+        var words = _query.Trim();
+        if (words.Length < 2) return;
+        _communitySearch?.Cancel();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        _communitySearch = cancellation;
+        IsSearchingCommunity = true;
+        CommunityMessage = string.Empty;
+        try
+        {
+            var found = await _library.SearchCommunityAsync(words, cancellation.Token);
+            if (cancellation.IsCancellationRequested) return;
+            CommunityResults.Clear();
+            foreach (var repository in found) CommunityResults.Add(new(repository));
+            CommunityMessage = found.Count == 0 ? "No GGUF models on Hugging Face match these words."
+                : "Community uploads aren't tested by Winference. Each file is checked against Hugging Face's fingerprint when downloaded.";
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception error) when (error is HttpRequestException or Winference.Core.Runtime.RuntimeException)
+        {
+            CommunityMessage = error is Winference.Core.Runtime.RuntimeException runtime ? runtime.Message
+                : "Hugging Face couldn't be reached. Check your internet connection and try again.";
+        }
+        finally
+        {
+            if (ReferenceEquals(_communitySearch, cancellation)) { _communitySearch = null; IsSearchingCommunity = false; }
+        }
+    }
+
+    private async Task LoadFilesAsync(CommunityRepositoryViewModel repository)
+    {
+        repository.SetLoading();
+        try
+        {
+            var files = await _library.ListCommunityFilesAsync(repository.Id, _lifetime.Token);
+            repository.SetFiles(files.Select(file => new CommunityFileViewModel(file, _library.MemoryBytes)).ToArray());
+        }
+        catch (OperationCanceledException) when (_lifetime.IsClosing) { }
+        catch (Exception error) when (error is HttpRequestException or Winference.Core.Runtime.RuntimeException)
+        {
+            repository.SetProblem(error is Winference.Core.Runtime.RuntimeException runtime ? runtime.Message
+                : "Hugging Face couldn't be reached. Check your internet connection and try again.");
+        }
+    }
+
+    /// <summary>Gets one community file through the shared library, so progress and Cancel behave as usual.</summary>
+    public async Task GetCommunityFileAsync(CommunityFileViewModel file)
+    {
+        file.Entry ??= _library.AddCommunity(file.File);
+        if (file.Entry.CanAct) await _library.PerformAsync(file.Entry);
+    }
+
     public string Query
     {
         get => _query;
-        set { value ??= string.Empty; if (_query == value) return; _query = value; Changed(); ApplyView(); }
+        set
+        {
+            value ??= string.Empty;
+            if (_query == value) return;
+            _query = value;
+            Changed(); Changed(nameof(CommunityVisibility)); Changed(nameof(CommunitySearchLabel));
+            ApplyView();
+        }
     }
 
     public ModelFilter RunsOn
@@ -165,7 +258,9 @@ public sealed class DiscoverViewModel : INotifyPropertyChanged
         if (_runsOn != ModelFilter.All && !family.Variants.Any(variant => ModelCatalogView.Matches(variant.Mode, _runsOn))) return false;
         if ((family.Capabilities & _needs) != _needs) return false;
         var text = _query.Trim();
-        return text.Length == 0 || family.SearchText.Contains(text, StringComparison.OrdinalIgnoreCase);
+        // "qwen3 4b" should find "Qwen 3 4B", so spacing and punctuation are ignored too.
+        return text.Length == 0 || family.SearchText.Contains(text, StringComparison.OrdinalIgnoreCase) ||
+            family.SearchKey.Contains(ModelFamilyKey.For(text), StringComparison.Ordinal);
     }
 
     private static string Ago(TimeSpan age) => age.TotalMinutes < 1 ? "just now"
@@ -199,6 +294,7 @@ public sealed class DiscoverFamilyViewModel(string key) : INotifyPropertyChanged
     public long SmallestBytes { get; private set; }
     public long LargestFittingBytes { get; private set; }
     public string SearchText { get; private set; } = string.Empty;
+    public string SearchKey { get; private set; } = string.Empty;
 
     public string EnginesLabel => string.Join(" · ", Variants.Select(variant => variant.Badge).Distinct());
     public string SizeLabel => SmallestBytes > 0 ? $"From {StorageCheck.Format(SmallestBytes)}" : string.Empty;
@@ -241,6 +337,7 @@ public sealed class DiscoverFamilyViewModel(string key) : INotifyPropertyChanged
         var known = Variants.Select(variant => variant.Fit).Where(fit => fit != FitLevel.Unknown).ToArray();
         BestFit = known.Length > 0 ? known.Min() : FitLevel.Unknown;
         SearchText = string.Join(' ', ordered.Select(entry => $"{entry.Name} {entry.Publisher} {entry.Badge} {entry.Entry.Profile.Artifact.Source}"));
+        SearchKey = string.Join('|', ordered.Select(entry => ModelFamilyKey.For(entry.Entry.Family.DisplayName)).Append(Key));
         PropertyChanged?.Invoke(this, new(string.Empty));
     }
 }
@@ -293,4 +390,60 @@ public sealed class DiscoverVariantViewModel : INotifyPropertyChanged
         _memoryBytes = memoryBytes;
         PropertyChanged?.Invoke(this, new(string.Empty));
     }
+}
+
+/// <summary>One Hugging Face repository from search. Its files are listed when it's opened.</summary>
+public sealed class CommunityRepositoryViewModel(HuggingFaceRepository repository) : INotifyPropertyChanged
+{
+    private string _status = string.Empty;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string Id => repository.Id;
+    public string Name => repository.Name.EndsWith("-GGUF", StringComparison.OrdinalIgnoreCase) ? repository.Name[..^5] : repository.Name;
+    public string Publisher => ModelMakers.For(Name) is { } maker ? $"{maker} · uploaded by {repository.Owner}" : $"Uploaded by {repository.Owner}";
+    public string Popularity => $"{Count(repository.Downloads)} downloads · {Count(repository.Likes)} likes";
+    public string SourcePage => $"https://huggingface.co/{repository.Id}";
+    public bool IsLoaded { get; private set; }
+    public ObservableCollection<CommunityFileViewModel> Files { get; } = [];
+    public string Status { get => _status; private set { _status = value; PropertyChanged?.Invoke(this, new(nameof(Status))); } }
+    public string AutomationName => $"{Name}, community upload by {repository.Owner}, {Popularity}";
+
+    internal void SetLoading() { IsLoaded = true; Status = "Listing files…"; }
+
+    internal void SetFiles(IReadOnlyList<CommunityFileViewModel> files)
+    {
+        Files.Clear();
+        foreach (var file in files) Files.Add(file);
+        Status = files.Count == 0 ? "This repository has no single-file GGUF models Winference can use." : string.Empty;
+    }
+
+    internal void SetProblem(string message) { IsLoaded = false; Status = message; }
+
+    private static string Count(long value) => value >= 1_000_000 ? $"{value / 1_000_000d:0.#}M" : value >= 1_000 ? $"{value / 1_000d:0.#}K" : value.ToString();
+}
+
+/// <summary>One downloadable file (a quantization) in a community repository.</summary>
+public sealed class CommunityFileViewModel(HuggingFaceFile file, long memoryBytes) : INotifyPropertyChanged
+{
+    private ModelEntryViewModel? _entry;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public HuggingFaceFile File { get; } = file;
+    public string FileName => File.FileName;
+    /// <summary>Q4_K_M is the usual balance of size and answer quality.</summary>
+    public bool IsRecommended => File.FileName.Contains("Q4_K_M", StringComparison.OrdinalIgnoreCase);
+    public string Summary => string.Join(" · ", new[] { IsRecommended ? "Recommended" : string.Empty, StorageCheck.Format(File.LengthBytes),
+            ModelFit.Label(ModelFit.Estimate(File.LengthBytes, memoryBytes)) }
+        .Where(part => part.Length > 0));
+
+    /// <summary>The library row created when Get is first chosen; its status and progress drive the UI.</summary>
+    public ModelEntryViewModel? Entry
+    {
+        get => _entry;
+        set { _entry = value; PropertyChanged?.Invoke(this, new(string.Empty)); }
+    }
+
+    public string ActionLabel => _entry?.ActionLabel is { Length: > 0 } label ? label : "Get";
 }

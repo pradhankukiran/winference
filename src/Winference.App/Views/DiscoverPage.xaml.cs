@@ -46,6 +46,22 @@ public sealed partial class DiscoverPage : Page
 
     private void CloseDetail_Click(object sender, RoutedEventArgs args) => ViewModel.Selected = null;
 
+    private void Search_QuerySubmitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args) => _ = ViewModel.SearchCommunityAsync();
+
+    private void SearchCommunity_Click(object sender, RoutedEventArgs args) => _ = ViewModel.SearchCommunityAsync();
+
+    private void Repository_ItemClick(object sender, ItemClickEventArgs args)
+    {
+        if (args.ClickedItem is CommunityRepositoryViewModel repository) ViewModel.SelectedRepository = repository;
+    }
+
+    private void CloseRepository_Click(object sender, RoutedEventArgs args) => ViewModel.SelectedRepository = null;
+
+    private async void CommunityFile_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is FrameworkElement { DataContext: CommunityFileViewModel file }) await ViewModel.GetCommunityFileAsync(file);
+    }
+
     private async void Action_Click(object sender, RoutedEventArgs args)
     {
         if (sender is FrameworkElement { DataContext: DiscoverVariantViewModel { Entry.CanAct: true } variant })

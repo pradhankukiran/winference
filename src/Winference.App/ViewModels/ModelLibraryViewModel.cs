@@ -254,6 +254,31 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
     private bool CanAct(ModelStatus status) => status == ModelStatus.Downloading ||
         !_shell.HasModelActivity && (status is ModelStatus.Ready or ModelStatus.Failed || _downloading is null);
 
+    public Task<IReadOnlyList<Infrastructure.Discover.HuggingFaceRepository>> SearchCommunityAsync(string query, CancellationToken token) =>
+        _library.HuggingFace.SearchGgufAsync(query, token);
+
+    public Task<IReadOnlyList<Infrastructure.Discover.HuggingFaceFile>> ListCommunityFilesAsync(string repository, CancellationToken token) =>
+        _library.HuggingFace.ListGgufFilesAsync(repository, token);
+
+    /// <summary>
+    /// A row for one community file, so Get, progress and Cancel work as for any other model.
+    /// It joins the library until the next refresh; once downloaded it shows as a model on this PC.
+    /// </summary>
+    public ModelEntryViewModel AddCommunity(Infrastructure.Discover.HuggingFaceFile file)
+    {
+        var model = _library.CommunityModel(file);
+        var profile = new LibraryProfile("community-" + model.Id, ExecutionMode.GpuOnly, "Vulkan llama.cpp", model.Artifact,
+            new(ModelAvailability.DownloadRequired, "Community upload. Get verifies it against Hugging Face's fingerprint."),
+            model.LengthBytes, model.LengthBytes, null, false, true, false,
+            $"Community upload from {model.SourcePage}. Not tested by Winference.", Core.Discover.ModelCapabilities.None,
+            Core.Discover.CatalogTier.Community);
+        if (_entries.GetValueOrDefault(profile.ProfileId) is { } existing) return existing;
+        var entry = new ModelEntryViewModel(new ModelCatalogEntry(model.Family, profile), null, null, null, model, false);
+        _entries[profile.ProfileId] = entry;
+        UpdateStatuses();
+        return entry;
+    }
+
     /// <summary>Carries out the row's main button.</summary>
     public async Task PerformAsync(ModelEntryViewModel entry)
     {
@@ -330,6 +355,7 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
         UpdateStatuses();
         DownloadChanged();
         string? failure = null;
+        string? finishedKey = null;
         var completed = false;
         try
         {
@@ -340,8 +366,10 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             }
             else if ((entry.Download ?? (entry.Registry is { } tested ? await ResolveAsync(entry, tested, cancellation.Token) : null)) is { } gpu)
             {
-                await _library.DownloadGpuAsync(gpu, new Progress<DownloadProgress>(value =>
-                    ReportDownload(entry, value.State == DownloadState.Verifying ? "Verifying…" : "Downloading…", value.Percent)), cancellation.Token);
+                // A downloaded GGUF is listed under its registration, not the catalog row it came from.
+                finishedKey = (await _library.DownloadGpuAsync(gpu, new Progress<DownloadProgress>(value =>
+                    ReportDownload(entry, value.State == DownloadState.Verifying ? "Verifying…" : "Downloading…", value.Percent)), cancellation.Token))
+                    .Profile.ProfileId;
                 if (_gpuStatus is { IsInstalled: false })
                     await _gpuRuntime.AcquireAsync(new Progress<SetupProgress>(value =>
                         ReportDownload(entry, "Getting the GPU component…", value.Percent)), cancellation.Token);
@@ -369,7 +397,8 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             Error = failure;
             _shell.ReportShellError(failure);
         }
-        else if (completed && _entries.GetValueOrDefault(entry.Key) is { } finished) Finish(finished);
+        else if (completed && (_entries.GetValueOrDefault(entry.Key) ?? (finishedKey is null ? null : _entries.GetValueOrDefault(finishedKey))) is { } finished)
+            Finish(finished);
     }
 
     private async Task<GpuCatalogModel> ResolveAsync(ModelEntryViewModel entry, Infrastructure.Discover.RegistryModel tested, CancellationToken token)

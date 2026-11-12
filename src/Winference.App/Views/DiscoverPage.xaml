@@ -68,6 +68,7 @@
             <Grid ColumnSpacing="12">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="320" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                 <AutoSuggestBox x:Name="Search" PlaceholderText="Search models" QueryIcon="Find" TextChanged="Search_TextChanged"
+                                QuerySubmitted="Search_QuerySubmitted"
                                 AutomationProperties.AutomationId="DiscoverSearch" AutomationProperties.Name="Search models" />
                 <SelectorBar x:Name="RunsOnBar" Grid.Column="1" SelectionChanged="RunsOn_SelectionChanged"
                              AutomationProperties.Name="Show models that run on">
@@ -108,8 +109,96 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+
+                    <StackPanel Spacing="8" Visibility="{x:Bind ViewModel.CommunityVisibility, Mode=OneWay}"
+                                AutomationProperties.AutomationId="CommunitySection">
+                        <TextBlock Text="Community models on Hugging Face" Style="{StaticResource WinferenceSectionTitleStyle}"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button Content="{x:Bind ViewModel.CommunitySearchLabel, Mode=OneWay}" Click="SearchCommunity_Click"
+                                    AutomationProperties.AutomationId="SearchCommunity" />
+                            <ProgressRing Width="20" Height="20" IsActive="{x:Bind ViewModel.IsSearchingCommunity, Mode=OneWay}" />
+                        </StackPanel>
+                        <TextBlock Text="{x:Bind ViewModel.CommunityMessage, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}"
+                                   TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite" />
+                        <GridView ItemsSource="{x:Bind ViewModel.CommunityResults}" SelectionMode="None" IsItemClickEnabled="True"
+                                  ItemClick="Repository_ItemClick" ScrollViewer.VerticalScrollMode="Disabled"
+                                  ScrollViewer.VerticalScrollBarVisibility="Disabled" AutomationProperties.Name="Community models">
+                            <GridView.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Width="252" Height="112" Padding="14,12" CornerRadius="8" BorderThickness="1"
+                                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            AutomationProperties.Name="{Binding AutomationName}">
+                                        <Grid RowSpacing="4">
+                                            <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource WinferenceSectionTitleStyle}"
+                                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" ToolTipService.ToolTip="{Binding Id}" />
+                                            <TextBlock Grid.Row="1" Text="{Binding Publisher}" Style="{StaticResource WinferenceCaptionStyle}"
+                                                       TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                            <TextBlock Grid.Row="3" Text="{Binding Popularity}" Style="{StaticResource WinferenceCaptionStyle}" />
+                                            <TextBlock Grid.Row="3" Text="Community" Style="{StaticResource WinferenceCaptionStyle}" HorizontalAlignment="Right" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </GridView.ItemTemplate>
+                        </GridView>
+                    </StackPanel>
                 </StackPanel>
             </ScrollViewer>
+
+            <Border Grid.Column="1" Width="380" Visibility="{x:Bind ViewModel.RepositoryDetailVisibility, Mode=OneWay}"
+                    Background="{ThemeResource LayerFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1,1,0,0" CornerRadius="8,0,0,0" AutomationProperties.AutomationId="CommunityDetail">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                    <StackPanel Spacing="12" DataContext="{x:Bind ViewModel.SelectedRepository, Mode=OneWay}">
+                        <Grid>
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" Style="{StaticResource SubtitleTextBlockStyle}" TextWrapping="Wrap"
+                                           AutomationProperties.HeadingLevel="Level2" />
+                                <TextBlock Text="{Binding Publisher}" Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                            </StackPanel>
+                            <Button HorizontalAlignment="Right" VerticalAlignment="Top" Click="CloseRepository_Click"
+                                    Style="{StaticResource WinferenceSubtleButtonStyle}" ToolTipService.ToolTip="Close"
+                                    AutomationProperties.Name="Close details">
+                                <FontIcon Glyph="&#xE711;" FontSize="12" />
+                            </Button>
+                        </Grid>
+                        <TextBlock Text="Community upload. Winference hasn't tested it, and it runs on the GPU. Each file is checked against Hugging Face's fingerprint when downloaded."
+                                   Style="{StaticResource WinferenceSecondaryTextStyle}" TextWrapping="Wrap" />
+                        <HyperlinkButton Content="Open on Hugging Face" NavigateUri="{Binding SourcePage}" Padding="0" />
+                        <TextBlock Text="Files" Style="{StaticResource WinferenceSectionTitleStyle}" Margin="0,8,0,0" />
+                        <TextBlock Text="{Binding Status}" Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap"
+                                   AutomationProperties.LiveSetting="Polite" />
+                        <ItemsControl ItemsSource="{Binding Files}" IsTabStop="False">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="8" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource WinferenceCardStyle}">
+                                        <StackPanel Spacing="6">
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                                <StackPanel Spacing="2">
+                                                    <TextBlock Text="{Binding FileName}" Style="{StaticResource WinferenceSectionTitleStyle}" TextWrapping="Wrap" />
+                                                    <TextBlock Text="{Binding Summary}" Style="{StaticResource WinferenceCaptionStyle}" />
+                                                </StackPanel>
+                                                <Button Grid.Column="1" Content="{Binding Entry.ActionLabel, FallbackValue=Get, TargetNullValue=Get}"
+                                                        Click="CommunityFile_Click" MinWidth="72" VerticalAlignment="Top"
+                                                        AutomationProperties.Name="{Binding FileName}" />
+                                            </Grid>
+                                            <TextBlock Text="{Binding Entry.StatusLine}" Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap"
+                                                       AutomationProperties.LiveSetting="Polite" />
+                                            <ProgressBar Visibility="{Binding Entry.ProgressVisibility, FallbackValue=Collapsed}"
+                                                         IsIndeterminate="{Binding Entry.IsProgressIndeterminate}"
+                                                         Value="{Binding Entry.ProgressValue}" Maximum="100" AutomationProperties.Name="Download progress" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
 
             <Border Grid.Column="1" Width="380" Visibility="{x:Bind ViewModel.DetailVisibility, Mode=OneWay}"
                     Background="{ThemeResource LayerFillColorDefaultBrush}" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"

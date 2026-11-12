@@ -89,6 +89,26 @@ public sealed class ModelLibraryService
         return resolved;
     }
 
+    public HuggingFaceClient HuggingFace => _huggingFace;
+
+    /// <summary>A community GGUF chosen from search, as a pinned, verifiable download.</summary>
+    public GpuCatalogModel CommunityModel(HuggingFaceFile file)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        var quantization = QuantizationOf(file.FileName);
+        var id = "hf-" + Slug(file.Repository.Replace('/', '-') + "-" + quantization);
+        if (id.Length > 80) id = id[..80].TrimEnd('-');
+        var name = file.Repository[(file.Repository.IndexOf('/') + 1)..];
+        if (name.EndsWith("-GGUF", StringComparison.OrdinalIgnoreCase)) name = name[..^5];
+        var owner = file.Repository[..file.Repository.IndexOf('/')];
+        var family = new ModelFamily("community-" + ModelFamilyKey.For(name), name, ModelMakers.For(name) ?? owner,
+            $"A community upload on Hugging Face by {owner}. Winference hasn't tested it; it's verified against Hugging Face's fingerprint when downloaded.");
+        var model = new GpuCatalogModel(id, family, file.FileName, file.Download, file.SourcePage, file.Revision, file.Sha256,
+            file.LengthBytes, quantization.Length <= 40 ? quantization : "GGUF", 4096);
+        model.Validate();
+        return model;
+    }
+
     public bool CanRemove(LibraryProfile profile) => _removal.CanRemove(profile);
 
     public async Task<ModelRemovalPlan> PlanRemovalAsync(LibraryProfile profile, CancellationToken token = default)

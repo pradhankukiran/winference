@@ -192,6 +192,26 @@ public class DiscoverTests
     }
 
     [Fact]
+    public async Task Search_lists_public_gguf_repositories()
+    {
+        var client = new HuggingFaceClient(Serve(new()
+        {
+            ["models"] = """
+            [{"id": "unsloth/Qwen3.5-4B-GGUF", "downloads": 1537690, "likes": 557},
+             {"id": "someone/private-GGUF", "private": true},
+             {"id": "not a repo"}]
+            """
+        }));
+
+        var found = await client.SearchGgufAsync("qwen 4b");
+
+        var repository = Assert.Single(found);
+        Assert.Equal("unsloth", repository.Owner);
+        Assert.Equal("Qwen3.5-4B-GGUF", repository.Name);
+        Assert.Equal(1537690, repository.Downloads);
+    }
+
+    [Fact]
     public async Task A_gated_model_is_refused_before_any_download()
     {
         var client = new HuggingFaceClient(Serve(new() { ["M-GGUF"] = """{"sha": "50968a4468ef4233ed78cd7c3de230dd1d61a56b", "gated": "manual", "siblings": []}""" }));

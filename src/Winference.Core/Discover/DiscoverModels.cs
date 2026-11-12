@@ -94,7 +94,7 @@ public static class ModelMakers
         ("medgemma", "Google"), ("translategemma", "Google"), ("phi", "Microsoft"), ("mistral", "Mistral AI"),
         ("ministral", "Mistral AI"), ("devstral", "Mistral AI"), ("magistral", "Mistral AI"), ("deepseek", "DeepSeek"),
         ("gptoss", "OpenAI"), ("granite", "IBM"), ("lfm", "Liquid AI"), ("smollm", "Hugging Face"), ("olmo", "Ai2"),
-        ("amdolmo", "AMD"), ("nemotron", "NVIDIA"), ("minicpm", "OpenBMB"), ("glm", "Zhipu AI"),
+        ("amdolmo", "AMD"), ("nemotron", "NVIDIA"), ("minicpm", "OpenBMB"), ("glm", "Zhipu AI"), ("chatglm", "Zhipu AI"),
         ("hunyuan", "Tencent"), ("nanbeige", "Nanbeige"), ("kimi", "Moonshot AI"), ("exaone", "LG AI Research"),
         ("falcon", "TII"), ("cogito", "Deep Cogito"),
     ];

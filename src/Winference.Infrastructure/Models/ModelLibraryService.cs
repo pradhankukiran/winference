@@ -43,6 +43,7 @@ public sealed class ModelLibraryService
     private readonly SetupPaths _paths;
     private readonly CatalogRefreshService? _catalogs;
     private readonly HuggingFaceClient _huggingFace;
+    private readonly HybridModelDownloadService _hybridDownloads;
     private IReadOnlyList<RegistryModel> _registry = [];
 
     public ModelLibraryService(SetupPaths paths, ISetupService setup, GpuModelService gpuModels,
@@ -53,6 +54,7 @@ public sealed class ModelLibraryService
         _paths = paths;
         _catalogs = catalogs;
         _huggingFace = new HuggingFaceClient(http);
+        _hybridDownloads = new HybridModelDownloadService(paths.DataRoot, hybridModels, _huggingFace, http);
         _setup = setup ?? throw new ArgumentNullException(nameof(setup));
         _gpuModels = gpuModels ?? throw new ArgumentNullException(nameof(gpuModels));
         _hybridModels = hybridModels ?? throw new ArgumentNullException(nameof(hybridModels));
@@ -90,6 +92,16 @@ public sealed class ModelLibraryService
     }
 
     public HuggingFaceClient HuggingFace => _huggingFace;
+
+    /// <summary>Downloads and registers a tested GPU + NPU export from AMD's Hugging Face models.</summary>
+    public async Task<HybridModelRegistration> DownloadHybridAsync(RegistryModel model, IProgress<DownloadProgress>? progress,
+        CancellationToken cancellationToken = default)
+    {
+        if (model.Mode != ExecutionMode.GpuNpu) throw new ArgumentException("Only GPU + NPU exports download here.", nameof(model));
+        await _mutations.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await _hybridDownloads.DownloadAsync(model.Repository, progress, cancellationToken).ConfigureAwait(false); }
+        finally { _mutations.Release(); }
+    }
 
     /// <summary>A community GGUF chosen from search, as a pinned, verifiable download.</summary>
     public GpuCatalogModel CommunityModel(HuggingFaceFile file)
@@ -161,6 +173,7 @@ public sealed class ModelLibraryService
         AddRegisteredGpu(families, gpuModels);
         if (inspection is not null) AddFlm(families, inspection, FlmCapabilities());
         AddHybrid(families, hybridModels, inspection);
+        AddRegistryHybrid(families, hybridModels, inspection);
         AddHybridImport(families);
 
         var summary = inspection is null
@@ -292,6 +305,36 @@ public sealed class ModelLibraryService
                 model.SizeBytes, model.SizeBytes, null, false, true, false,
                 $"From Lemonade's tested model list. Source: {model.SourcePage}." +
                     (model.HasVisionProjector ? " Pictures aren't supported for GPU models yet, so it works as a text model." : string.Empty),
+                model.Capabilities & ~ModelCapabilities.Vision, CatalogTier.Tested);
+            Get(families, family).Add(profile);
+        }
+    }
+
+    /// <summary>AMD's GPU + NPU exports from Lemonade's tested list, downloaded whole when Get is chosen.</summary>
+    private void AddRegistryHybrid(Dictionary<string, FamilyBuilder> families, IReadOnlyList<HybridModelRegistration> registrations,
+        SetupInspection? inspection)
+    {
+        foreach (var model in _registry.Where(entry => entry.Mode == ExecutionMode.GpuNpu))
+        {
+            var folder = _hybridDownloads.FolderFor(model.Repository);
+            if (registrations.Any(registered => string.Equals(registered.RepositoryId, model.Repository, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Path.GetFullPath(registered.ModelDirectory), Path.GetFullPath(folder), StringComparison.OrdinalIgnoreCase)))
+                continue;
+            var reason = inspection is { NpuDetected: false } ? "A supported AMD NPU is required for GPU + NPU models." : null;
+            var name = model.Name.EndsWith("-Hybrid", StringComparison.Ordinal) ? model.Name[..^7] : model.Name;
+            var family = new ModelFamily("tested-" + ModelFamilyKey.For(model.Name), name, ModelMakers.For(name) ?? "AMD",
+                "Tested by Lemonade on AMD Ryzen AI. Exported for GPU + NPU by AMD.");
+            var profile = new LibraryProfile(
+                "tested-hybrid-" + RegistryId(model), ExecutionMode.GpuNpu, "AMD Ryzen AI 1.7 hybrid worker",
+                new(RegistryArtifactPrefix + RegistryId(model), family, ModelArtifactFormat.RyzenAiHybrid, "1.7",
+                    model.SourcePage, "latest", model.SizeBytes, null, "AMD Ryzen AI 1.7 hybrid worker"),
+                reason is null
+                    ? new(ModelAvailability.DownloadRequired, Directory.Exists(folder)
+                        ? "Part of this model is already downloaded. Get finishes it."
+                        : "Tested by Lemonade. Get downloads AMD's export and verifies every file.")
+                    : new(ModelAvailability.Unavailable, reason, reason),
+                model.SizeBytes, model.SizeBytes, null, false, reason is null, false,
+                $"AMD Ryzen AI 1.7 GPU + NPU export from Lemonade's tested list. Source: {model.SourcePage}.",
                 model.Capabilities & ~ModelCapabilities.Vision, CatalogTier.Tested);
             Get(families, family).Add(profile);
         }

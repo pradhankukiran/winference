@@ -219,6 +219,11 @@ public class DiscoverTests
         Assert.Contains("account", error.Message);
     }
 
+    [Fact]
+    public void Small_files_are_checked_with_their_git_fingerprint() =>
+        // `git hash-object` of a file containing "hello\n".
+        Assert.Equal("ce013625030ba8dba906f756967f9e9ca394464a", HybridModelDownloadService.GitBlobSha1(Encoding.UTF8.GetBytes("hello\n")));
+
     private static void CopyBundled(string app)
     {
         Directory.CreateDirectory(Path.Combine(app, "Catalogs"));

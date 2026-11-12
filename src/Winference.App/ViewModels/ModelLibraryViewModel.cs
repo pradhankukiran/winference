@@ -42,6 +42,7 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
     private ModelSessionService _session = null!;
     private SetupInspection? _inspection;
     private GpuRuntimeStatus? _gpuStatus;
+    private HybridRuntimeStatus? _hybridStatus;
     private Task? _refresh;
     private Task? _download;
     private CancellationTokenSource? _downloadCancellation;
@@ -158,7 +159,9 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             var gpuTask = _gpuModels.ReadRegisteredAsync(token);
             var gpuRuntimeTask = _gpuRuntime.InspectAsync(token);
             var hybridTask = _hybridModels.ReadRegisteredAsync(token);
-            await Task.WhenAll(inspectionTask, gpuTask, gpuRuntimeTask, hybridTask);
+            var hybridRuntimeTask = _hybridRuntime.InspectAsync(token);
+            await Task.WhenAll(inspectionTask, gpuTask, gpuRuntimeTask, hybridTask, hybridRuntimeTask);
+            _hybridStatus = await hybridRuntimeTask;
             var inspection = await inspectionTask;
             var snapshot = await _library.InspectAsync(inspection, token);
             if (_lifetime.IsClosing) return;
@@ -315,7 +318,9 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
 
     private long ComponentBytes(ModelEntryViewModel entry) => entry.Npu is not null
         ? _inspection?.RuntimeInstalled == false ? _inspection.RuntimeDownloadBytes ?? 0 : 0
-        : _gpuStatus is { IsInstalled: false } status ? status.DownloadBytes : 0;
+        : entry.Registry is { Mode: ExecutionMode.GpuNpu }
+            ? _hybridStatus is { IsInstalled: false } hybrid ? hybrid.DownloadBytes : 0
+            : _gpuStatus is { IsInstalled: false } status ? status.DownloadBytes : 0;
 
     private async Task GetAsync(ModelEntryViewModel entry, bool confirm)
     {
@@ -363,6 +368,15 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             {
                 await _downloader.DownloadAsync(new(npu.Id, ExecutionMode.NpuOnly, _inspection!.DefaultModelStore, npu.SuggestedContextLength),
                     new Progress<SetupProgress>(value => ReportDownload(entry, DownloadLabel(value.Stage), value.Percent)), cancellation.Token);
+            }
+            else if (entry.Registry is { Mode: ExecutionMode.GpuNpu } export)
+            {
+                finishedKey = (await _library.DownloadHybridAsync(export, new Progress<DownloadProgress>(value =>
+                    ReportDownload(entry, value.State == DownloadState.Verifying ? "Verifying…" : "Downloading…", value.Percent)), cancellation.Token))
+                    .Profile.ProfileId;
+                if (!(await _hybridRuntime.InspectAsync(cancellation.Token)).IsInstalled)
+                    await _hybridRuntime.AcquireAsync(new Progress<SetupProgress>(value =>
+                        ReportDownload(entry, "Getting the GPU + NPU component…", value.Percent)), cancellation.Token);
             }
             else if ((entry.Download ?? (entry.Registry is { } tested ? await ResolveAsync(entry, tested, cancellation.Token) : null)) is { } gpu)
             {

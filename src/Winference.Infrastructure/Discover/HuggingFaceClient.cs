@@ -11,6 +11,9 @@ public sealed record HuggingFaceFile(string Repository, string Revision, string 
     public Uri SourcePage => new($"https://huggingface.co/{Repository}");
 }
 
+/// <summary>One file in a repository: large files carry a SHA-256, small ones a git blob SHA-1.</summary>
+public sealed record HuggingFaceRepositoryFile(string Name, long LengthBytes, string? Sha256, string? GitSha1);
+
 /// <summary>A Hugging Face repository found by search. Uploads there are community work, not tested by Winference.</summary>
 public sealed record HuggingFaceRepository(string Id, long Downloads, long Likes)
 {
@@ -52,6 +55,14 @@ public sealed partial class HuggingFaceClient(HttpClient? http = null)
         return files.Where(file => IsSingleModelFile(file.Name) && file.Sha256 is not null && file.Length > 0)
             .Select(file => new HuggingFaceFile(repository, revision, file.Name, file.Sha256!, file.Length))
             .OrderBy(file => file.LengthBytes).ToArray();
+    }
+
+    /// <summary>Every file in a repository at its current commit, with the fingerprint each can be verified against.</summary>
+    public async Task<(string Revision, IReadOnlyList<HuggingFaceRepositoryFile> Files)> ListFilesAsync(string repository,
+        CancellationToken cancellationToken = default)
+    {
+        var (revision, files) = await ReadRepositoryAsync(repository, cancellationToken).ConfigureAwait(false);
+        return (revision, files.Select(file => new HuggingFaceRepositoryFile(file.Name, file.Length, file.Sha256, file.GitSha1)).ToArray());
     }
 
     /// <summary>Finds the GGUF file a registry entry names, either exactly or by its quantization.</summary>
@@ -124,19 +135,21 @@ public sealed partial class HuggingFaceClient(HttpClient? http = null)
     {
         if (!sibling.TryGetProperty("rfilename", out var name) || name.GetString() is not { Length: > 0 } fileName) return null;
         string? sha256 = null;
-        long length = 0;
+        long length = sibling.TryGetProperty("size", out var plainSize) && plainSize.TryGetInt64(out var bytes) ? bytes : 0;
         if (sibling.TryGetProperty("lfs", out var lfs) && lfs.ValueKind == JsonValueKind.Object)
         {
             sha256 = lfs.TryGetProperty("sha256", out var hash) ? hash.GetString() : null;
             if (lfs.TryGetProperty("size", out var size)) size.TryGetInt64(out length);
         }
-        return new(fileName, sha256 is not null && IsHex(sha256, 64) ? sha256.ToLowerInvariant() : null, length);
+        var blob = sibling.TryGetProperty("blobId", out var blobId) ? blobId.GetString() : null;
+        return new(fileName, sha256 is not null && IsHex(sha256, 64) ? sha256.ToLowerInvariant() : null, length,
+            sha256 is null && blob is not null && IsHex(blob, 40) ? blob.ToLowerInvariant() : null);
     }
 
     private static bool IsHex(string value, int length) => value.Length == length && value.All(Uri.IsHexDigit);
     private static RuntimeException Problem(string message) => new("huggingface", message);
 
-    private sealed record FileEntry(string Name, string? Sha256, long Length);
+    private sealed record FileEntry(string Name, string? Sha256, long Length, string? GitSha1 = null);
 
     [GeneratedRegex(@"-\d{5}-of-\d{5}\.gguf$", RegexOptions.IgnoreCase)]
     private static partial Regex SplitPart();

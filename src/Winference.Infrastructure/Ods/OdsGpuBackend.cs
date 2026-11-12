@@ -20,7 +20,6 @@ namespace Winference.Infrastructure.Ods;
 /// One app-owned AMD Vulkan llama.cpp session. The attributed ODS helper performs
 /// argument, runtime, device and model proofs; the Windows job owns its supervisor
 /// and native children. A separately running server is never adopted.
-/// Implementation only: GPU behavior has not been exercised yet.
 /// </summary>
 public sealed class OdsGpuBackend(
     GpuModelRegistration registration,

@@ -63,7 +63,7 @@ NPU, GPU and GPU + NPU are filters on the model list, not modes you have to mana
 | Mode | Engine | Hardware |
 |---|---|---|
 | NPU | FastFlowLM | AMD Ryzen AI 300 series and newer (XDNA 2 NPU) |
-| GPU | llama.cpp (Vulkan) | GPUs with Vulkan support |
+| GPU | llama.cpp (Vulkan) | AMD Radeon GPUs |
 | GPU + NPU | Ryzen AI hybrid | AMD Ryzen AI 300 series and newer |
 
 Tested on an AMD Ryzen AI 7 350 with Radeon 860M graphics.
@@ -89,7 +89,7 @@ Tested on an AMD Ryzen AI 7 350 with Radeon 860M graphics.
 
 - Windows 11 22H2 or later, x64
 - AMD Ryzen AI processor for NPU and GPU + NPU models
-- A Vulkan-capable GPU for GPU models
+- An AMD Radeon GPU for GPU models
 
 ## Build from source
 

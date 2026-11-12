@@ -81,3 +81,29 @@ public static class ModelFamilyKey
         return key.Length > 0 ? key : "model";
     }
 }
+
+/// <summary>
+/// The company behind a model family. Download sources often name whoever repackaged a model
+/// (for example "unsloth"), which isn't who made it.
+/// </summary>
+public static class ModelMakers
+{
+    private static readonly (string Prefix, string Maker)[] Known =
+    [
+        ("qwen", "Alibaba Qwen"), ("qwq", "Alibaba Qwen"), ("llama", "Meta"), ("codellama", "Meta"), ("gemma", "Google"),
+        ("medgemma", "Google"), ("translategemma", "Google"), ("phi", "Microsoft"), ("mistral", "Mistral AI"),
+        ("ministral", "Mistral AI"), ("devstral", "Mistral AI"), ("magistral", "Mistral AI"), ("deepseek", "DeepSeek"),
+        ("gptoss", "OpenAI"), ("granite", "IBM"), ("lfm", "Liquid AI"), ("smollm", "Hugging Face"), ("olmo", "Ai2"),
+        ("amdolmo", "AMD"), ("nemotron", "NVIDIA"), ("minicpm", "OpenBMB"), ("glm", "Zhipu AI"),
+        ("hunyuan", "Tencent"), ("nanbeige", "Nanbeige"), ("kimi", "Moonshot AI"), ("exaone", "LG AI Research"),
+        ("falcon", "TII"), ("cogito", "Deep Cogito"),
+    ];
+
+    /// <summary>The maker, or null when the name isn't recognised.</summary>
+    public static string? For(string name)
+    {
+        var key = ModelFamilyKey.For(name);
+        return Known.Where(known => key.StartsWith(known.Prefix, StringComparison.Ordinal))
+            .OrderByDescending(known => known.Prefix.Length).Select(known => known.Maker).FirstOrDefault();
+    }
+}

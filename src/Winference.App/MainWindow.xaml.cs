@@ -38,6 +38,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
     private readonly ModelLibraryViewModel _library;
     private readonly ModelSessionService _session;
     private readonly ModelsPage _modelsPage;
+    private readonly DiscoverPage _discoverPage;
     private readonly SettingsPage _settingsPage;
     private readonly WelcomePage _welcomePage;
     private readonly ReadAloudService _readAloud;
@@ -51,7 +52,8 @@ public sealed partial class MainWindow : Window, IShellNavigator
 
     public ShellNavigationItem[] NavigationItems { get; } =
     [
-        new(ShellPage.Models, "Models", "", "NavModels"),
+        new(ShellPage.Discover, "Discover", "\uE774", "NavDiscover"),
+        new(ShellPage.Models, "My models", "", "NavModels"),
         new(ShellPage.Settings, "Settings", "", "NavSettings")
     ];
 
@@ -67,7 +69,8 @@ public sealed partial class MainWindow : Window, IShellNavigator
         _gpuRuntime = new GpuRuntimeAcquisition(_dataRoot);
         var hybridModels = new HybridModelService(_dataRoot);
         _hybridRuntime = new HybridRuntimeAcquisition(_dataRoot);
-        var modelLibrary = new ModelLibraryService(paths, _setupService, gpuModels, hybridModels);
+        var catalogs = new Winference.Infrastructure.Discover.CatalogRefreshService(_dataRoot);
+        var modelLibrary = new ModelLibraryService(paths, _setupService, gpuModels, hybridModels, catalogs: catalogs);
         var activeSelection = new ActiveModelSelectionStore(_dataRoot);
         var activations = new ModelActivationFactory(_dataRoot, AppContext.BaseDirectory, gpuModels, _gpuRuntime,
             hybridModels, _hybridRuntime, _setupService, activeSelection);
@@ -93,8 +96,10 @@ public sealed partial class MainWindow : Window, IShellNavigator
             hybridModels, _hybridRuntime, activeSelection, conversationCatalog, queue, _dialogs, _lifetime, this, features);
         _library.Attach(_session);
         _modelsPage = new ModelsPage(_library);
+        _discoverPage = new DiscoverPage(new DiscoverViewModel(_library, catalogs, _lifetime));
+        _modelsPage.DiscoverRequested += (_, _) => ShowShell(ShellPage.Discover);
         _welcomePage = new WelcomePage(_library);
-        _welcomePage.AllModelsRequested += (_, _) => ShowShell(ShellPage.Models);
+        _welcomePage.AllModelsRequested += (_, _) => ShowShell(ShellPage.Discover);
         _settingsPage = new SettingsPage(_dataRoot);
         _settingsPage.RefreshRequested += Settings_RefreshRequested;
         _settingsPage.AppearanceChanged += Settings_AppearanceChanged;
@@ -143,14 +148,16 @@ public sealed partial class MainWindow : Window, IShellNavigator
         ShellLayout.Visibility = Visibility.Visible;
         PageHost.Content = page switch
         {
+            ShellPage.Discover => _discoverPage,
             ShellPage.Models => _modelsPage,
             ShellPage.Settings => _settingsPage,
             _ => (object?)_chatPage ?? _modelsPage
         };
         FooterNavigation.SelectedItem = PageHost.Content switch
         {
-            ModelsPage => NavigationItems[0],
-            SettingsPage => NavigationItems[1],
+            DiscoverPage => NavigationItems[0],
+            ModelsPage => NavigationItems[1],
+            SettingsPage => NavigationItems[2],
             _ => null
         };
     }

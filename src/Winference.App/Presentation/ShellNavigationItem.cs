@@ -1,6 +1,6 @@
 namespace Winference.App.Presentation;
 
-public enum ShellPage { Chat, Models, Settings }
+public enum ShellPage { Chat, Discover, Models, Settings }
 
 /// <summary>One destination pinned to the bottom of the sidebar.</summary>
 public sealed class ShellNavigationItem(ShellPage page, string label, string glyph, string automationId)

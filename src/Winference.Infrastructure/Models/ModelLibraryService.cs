@@ -1,8 +1,10 @@
+using Winference.Core.Discover;
 using Winference.Core.Downloads;
 using Winference.Core.Gpu;
 using Winference.Core.Hybrid;
 using Winference.Core.Models;
 using Winference.Core.Setup;
+using Winference.Infrastructure.Discover;
 using Winference.Infrastructure.Gpu;
 using Winference.Infrastructure.Hybrid;
 using Winference.Infrastructure.Setup;
@@ -38,11 +40,19 @@ public sealed class ModelLibraryService
     private readonly GpuModelDownloadService _downloads;
     private readonly ModelRemovalService _removal;
     private readonly SemaphoreSlim _mutations = new(1, 1);
+    private readonly SetupPaths _paths;
+    private readonly CatalogRefreshService? _catalogs;
+    private readonly HuggingFaceClient _huggingFace;
+    private IReadOnlyList<RegistryModel> _registry = [];
 
     public ModelLibraryService(SetupPaths paths, ISetupService setup, GpuModelService gpuModels,
-        HybridModelService hybridModels, HttpClient? http = null, string? gpuCatalogPath = null)
+        HybridModelService hybridModels, HttpClient? http = null, string? gpuCatalogPath = null,
+        CatalogRefreshService? catalogs = null)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        _paths = paths;
+        _catalogs = catalogs;
+        _huggingFace = new HuggingFaceClient(http);
         _setup = setup ?? throw new ArgumentNullException(nameof(setup));
         _gpuModels = gpuModels ?? throw new ArgumentNullException(nameof(gpuModels));
         _hybridModels = hybridModels ?? throw new ArgumentNullException(nameof(hybridModels));
@@ -61,6 +71,22 @@ public sealed class ModelLibraryService
         await _mutations.WaitAsync(cancellationToken).ConfigureAwait(false);
         try { return await _downloads.DownloadAsync(model, progress, cancellationToken).ConfigureAwait(false); }
         finally { _mutations.Release(); }
+    }
+
+    /// <summary>The tested GGUF entry behind a library profile, when it came from Lemonade's list.</summary>
+    public RegistryModel? RegistryFor(LibraryProfile profile) =>
+        profile.Artifact.Id.StartsWith(RegistryArtifactPrefix, StringComparison.Ordinal)
+            ? _registry.FirstOrDefault(model => RegistryId(model) == profile.Artifact.Id[RegistryArtifactPrefix.Length..]) : null;
+
+    /// <summary>Pins the exact file, version and fingerprint on Hugging Face so the download can be verified.</summary>
+    public async Task<GpuCatalogModel> ResolveRegistryAsync(RegistryModel model, CancellationToken cancellationToken = default)
+    {
+        var file = await _huggingFace.ResolveGgufAsync(model.Repository, model.FileName, model.Quantization, cancellationToken)
+            .ConfigureAwait(false);
+        var resolved = new GpuCatalogModel(RegistryId(model), RegistryFamily(model), file.FileName, file.Download, file.SourcePage,
+            file.Revision, file.Sha256, file.LengthBytes, model.Quantization ?? QuantizationOf(file.FileName), 4096);
+        resolved.Validate();
+        return resolved;
     }
 
     public bool CanRemove(LibraryProfile profile) => _removal.CanRemove(profile);
@@ -109,9 +135,11 @@ public sealed class ModelLibraryService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception error) { notices.Add(Message(error, "Registered GPU + NPU models could not be checked.")); }
 
+        _registry = LoadRegistry(notices);
         AddGpuCatalog(families, gpuModels);
+        AddRegistryGguf(families, gpuModels);
         AddRegisteredGpu(families, gpuModels);
-        if (inspection is not null) AddFlm(families, inspection);
+        if (inspection is not null) AddFlm(families, inspection, FlmCapabilities());
         AddHybrid(families, hybridModels, inspection);
         AddHybridImport(families);
 
@@ -175,7 +203,8 @@ public sealed class ModelLibraryService
         foreach (var model in registrations)
         {
             if (GpuCatalog.Models.Any(entry => entry.Sha256 == model.Sha256)) continue;
-            var family = FamilyForLocalGguf(model);
+            var registry = _registry.FirstOrDefault(entry => IsInFolder(model.ModelPath, RegistryFolder(entry)));
+            var family = registry is not null ? RegistryFamily(registry) : FamilyForLocalGguf(model);
             var usable = IsUsable(model);
             var profile = new LibraryProfile(
                 model.Profile.ProfileId, ExecutionMode.GpuOnly, "Vulkan llama.cpp + ODS bridge",
@@ -190,12 +219,96 @@ public sealed class ModelLibraryService
                 0, model.LengthBytes, model.ModelPath, usable, false, false,
                 usable
                     ? $"Registered GGUF: {model.Metadata.Architecture}, {model.Metadata.Quantization}, SHA-256 verified in place."
-                    : "Registration metadata exists, but its file is missing or changed. No model file was modified.");
+                    : "Registration metadata exists, but its file is missing or changed. No model file was modified.",
+                registry?.Capabilities ?? ModelCapabilities.None, registry is null ? CatalogTier.Community : CatalogTier.Tested);
             Get(families, family).Add(profile);
         }
     }
 
-    private static void AddFlm(Dictionary<string, FamilyBuilder> families, SetupInspection inspection)
+    private IReadOnlyList<RegistryModel> LoadRegistry(List<string> notices)
+    {
+        var path = _catalogs?.PathFor(CatalogRefreshService.LemonadeModels)
+            ?? Path.Combine(AppContext.BaseDirectory, "Runtimes", "Lemonade", "resources", "server_models.json");
+        try { return File.Exists(path) ? LemonadeRegistry.Load(path) : []; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            notices.Add("The tested GPU model list could not be read.");
+            return [];
+        }
+    }
+
+    private Dictionary<string, ModelCapabilities> FlmCapabilities()
+    {
+        try
+        {
+            return FlmModelCatalog.Load(_paths.CatalogPath, _paths.ModelInfoPath).Models
+                .ToDictionary(model => model.Id, model => ModelCapabilityLabels.FromLabels(model.Labels), StringComparer.Ordinal);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or Winference.Core.Runtime.RuntimeException)
+        { return new(StringComparer.Ordinal); }
+    }
+
+    /// <summary>Lemonade's tested GGUF list. A download is pinned to an exact file only when Get is chosen.</summary>
+    private void AddRegistryGguf(Dictionary<string, FamilyBuilder> families, IReadOnlyList<GpuModelRegistration> registrations)
+    {
+        foreach (var model in _registry.Where(entry => entry.Mode == ExecutionMode.GpuOnly))
+        {
+            // Already approved with a pinned hash, or already downloaded and shown as a registered file.
+            if (GpuCatalog.Models.Any(approved => approved.SourcePage.AbsolutePath.Trim('/') == model.Repository &&
+                (approved.FileName == model.FileName || model.Quantization is { } quant && HuggingFaceClient.MatchesQuantization(approved.FileName, quant))))
+                continue;
+            var folder = RegistryFolder(model);
+            if (registrations.Any(registered => IsInFolder(registered.ModelPath, folder))) continue;
+            var partial = Directory.Exists(folder) && Directory.EnumerateFiles(folder, "*.part").Any();
+            var family = RegistryFamily(model);
+            var quantization = model.Quantization ?? QuantizationOf(model.FileName!);
+            var profile = new LibraryProfile(
+                "tested-gguf-" + RegistryId(model), ExecutionMode.GpuOnly, "Vulkan llama.cpp",
+                new(RegistryArtifactPrefix + RegistryId(model), family, ModelArtifactFormat.Gguf, quantization,
+                    model.SourcePage, "latest", model.SizeBytes, null, "Vulkan llama.cpp"),
+                new(ModelAvailability.DownloadRequired, partial
+                    ? "A partial download is present. Get resumes it."
+                    : "Tested by Lemonade with llama.cpp. Get pins and verifies the exact file."),
+                model.SizeBytes, model.SizeBytes, null, false, true, false,
+                $"From Lemonade's tested model list. Source: {model.SourcePage}." +
+                    (model.HasVisionProjector ? " Pictures aren't supported for GPU models yet, so it works as a text model." : string.Empty),
+                model.Capabilities & ~ModelCapabilities.Vision, CatalogTier.Tested);
+            Get(families, family).Add(profile);
+        }
+    }
+
+    private const string RegistryArtifactPrefix = "registry:";
+
+    private static string RegistryId(RegistryModel model)
+    {
+        var id = "lemonade-" + Slug(model.Name);
+        return id.Length <= 80 ? id : id[..80].TrimEnd('-');
+    }
+
+    private string RegistryFolder(RegistryModel model) => Path.Combine(_paths.DataRoot, "Models", "Gpu", RegistryId(model));
+
+    private static bool IsInFolder(string path, string folder) =>
+        string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), Path.GetFullPath(folder), StringComparison.OrdinalIgnoreCase);
+
+    private static ModelFamily RegistryFamily(RegistryModel model)
+    {
+        var name = model.Name.EndsWith("-GGUF", StringComparison.OrdinalIgnoreCase) ? model.Name[..^5] : model.Name;
+        var publisher = model.Repository[..model.Repository.IndexOf('/')];
+        var family = new ModelFamily("tested-" + ModelFamilyKey.For(model.Name), name, publisher,
+            $"Tested by Lemonade with llama.cpp. Published on Hugging Face by {publisher}.");
+        family.Validate();
+        return family;
+    }
+
+    private static string QuantizationOf(string fileName)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var match = System.Text.RegularExpressions.Regex.Match(stem, @"(?i)(?:UD-)?(?:I?Q\d[A-Z0-9_]*|BF16|F16|F32)$");
+        return match.Success ? match.Value : "GGUF";
+    }
+
+    private static void AddFlm(Dictionary<string, FamilyBuilder> families, SetupInspection inspection,
+        IReadOnlyDictionary<string, ModelCapabilities> capabilities)
     {
         foreach (var model in inspection.Models)
         {
@@ -224,7 +337,8 @@ public sealed class ModelLibraryService
                 new(state, summary, unavailable),
                 installed ? 0 : model.DownloadBytes, model.StorageBytes, model.ExistingModelRoot,
                 state == ModelAvailability.Installed, state == ModelAvailability.DownloadRequired, false,
-                "FastFlowLM catalog entry with supplier file sizes. Local NPU answer quality is not implied.");
+                "FastFlowLM catalog entry with supplier file sizes. Local NPU answer quality is not implied.",
+                capabilities.GetValueOrDefault(model.Id));
             Get(families, family).Add(profile);
         }
     }

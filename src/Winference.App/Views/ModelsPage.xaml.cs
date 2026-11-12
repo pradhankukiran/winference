@@ -13,8 +13,13 @@ public sealed partial class ModelsPage : Page
     {
         Library = library;
         InitializeComponent();
-        ListHost.Content = new ModelListControl(library, compact: false);
+        ListHost.Content = new ModelListControl(library, compact: false, installedOnly: true);
     }
+
+    /// <summary>The user wants to find more models.</summary>
+    public event EventHandler? DiscoverRequested;
+
+    private void Discover_Click(object sender, RoutedEventArgs args) => DiscoverRequested?.Invoke(this, EventArgs.Empty);
 
     private void Page_Loaded(object sender, RoutedEventArgs args) => _ = Library.RefreshAsync();
 

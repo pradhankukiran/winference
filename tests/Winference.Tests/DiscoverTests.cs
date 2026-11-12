@@ -27,6 +27,14 @@ public class DiscoverTests
     [InlineData("Llama-3.2-1B-Instruct-Hybrid")]
     public void Builds_of_one_model_share_a_family_key(string name) => Assert.Equal("llama321b", ModelFamilyKey.For(name));
 
+    [Theory]
+    [InlineData("Qwen3-0.6B", "Alibaba Qwen")]
+    [InlineData("Llama-3.2-1B-Instruct", "Meta")]
+    [InlineData("gpt-oss-20b", "OpenAI")]
+    [InlineData("AMD-OLMo-1B-SFT-DPO-Hybrid", "AMD")]
+    [InlineData("Unknown-Model-1B", null)]
+    public void Models_are_credited_to_their_maker(string name, string? maker) => Assert.Equal(maker, ModelMakers.For(name));
+
     [Fact]
     public void Catalog_labels_become_capabilities() =>
         Assert.Equal(ModelCapabilities.Reasoning | ModelCapabilities.Vision | ModelCapabilities.Tools,
@@ -141,6 +149,54 @@ public class DiscoverTests
             Assert.True(service.IsStale(TimeSpan.FromDays(1)));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData("Qwen3-0.6B-Q4_0.gguf", "Q4_0", true)]
+    [InlineData("gemma-4-26B-UD-Q4_K_M.gguf", "UD-Q4_K_M", true)]
+    [InlineData("Qwen3-0.6B-Q4_0_L.gguf", "Q4_0", false)]
+    [InlineData("Qwen3-0.6B-IQ4_0.gguf", "Q4_0", false)]
+    public void A_quantization_picks_its_own_file(string file, string quantization, bool expected) =>
+        Assert.Equal(expected, HuggingFaceClient.MatchesQuantization(file, quantization));
+
+    [Theory]
+    [InlineData("model-Q4_K_M.gguf", true)]
+    [InlineData("mmproj-model-f16.gguf", false)]
+    [InlineData("model-Q4_K_M-00001-of-00002.gguf", false)]
+    [InlineData("Q4_K_M/model-Q4_K_M.gguf", false)]
+    public void Only_plain_single_files_are_downloaded(string file, bool expected) =>
+        Assert.Equal(expected, HuggingFaceClient.IsSingleModelFile(file));
+
+    [Fact]
+    public async Task A_lookup_pins_the_commit_file_and_fingerprint()
+    {
+        const string commit = "50968a4468ef4233ed78cd7c3de230dd1d61a56b";
+        const string hash = "33bcc57074ec7b6eada5a90651ee546ec0c2b271002c22baf9f1b2dd1e8f75cb";
+        var client = new HuggingFaceClient(Serve(new()
+        {
+            ["Qwen3-0.6B-GGUF"] = $$$"""
+            {"sha": "{{{commit}}}", "gated": false, "siblings": [
+              {"rfilename": "README.md"},
+              {"rfilename": "Qwen3-0.6B-Q4_0.gguf", "lfs": {"sha256": "{{{hash}}}", "size": 382156480}},
+              {"rfilename": "Qwen3-0.6B-Q4_1.gguf", "lfs": {"sha256": "{{{hash}}}", "size": 409091776}}]}
+            """
+        }));
+
+        var file = await client.ResolveGgufAsync("unsloth/Qwen3-0.6B-GGUF", null, "Q4_0");
+
+        Assert.Equal("Qwen3-0.6B-Q4_0.gguf", file.FileName);
+        Assert.Equal(commit, file.Revision);
+        Assert.Equal(hash, file.Sha256);
+        Assert.Equal(382156480, file.LengthBytes);
+        Assert.Equal($"https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/{commit}/Qwen3-0.6B-Q4_0.gguf", file.Download.ToString());
+    }
+
+    [Fact]
+    public async Task A_gated_model_is_refused_before_any_download()
+    {
+        var client = new HuggingFaceClient(Serve(new() { ["M-GGUF"] = """{"sha": "50968a4468ef4233ed78cd7c3de230dd1d61a56b", "gated": "manual", "siblings": []}""" }));
+        var error = await Assert.ThrowsAsync<Winference.Core.Runtime.RuntimeException>(() => client.ResolveGgufAsync("x/M-GGUF", "m.gguf", null));
+        Assert.Contains("account", error.Message);
     }
 
     private static void CopyBundled(string app)

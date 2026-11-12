@@ -1,3 +1,5 @@
+using Winference.Core.Discover;
+
 namespace Winference.Core.Models;
 
 /// <summary>One mode-specific entry shown in the unified model library.</summary>
@@ -13,7 +15,9 @@ public sealed record LibraryProfile(
     bool CanActivate,
     bool CanDownload,
     bool CanImport,
-    string Evidence)
+    string Evidence,
+    ModelCapabilities Capabilities = ModelCapabilities.None,
+    CatalogTier Tier = CatalogTier.Tested)
 {
     public string ModeLabel => ExecutionMode switch
     {

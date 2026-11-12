@@ -5,6 +5,7 @@ using Winference.Core.Gpu;
 using Winference.Core.Hybrid;
 using Winference.Core.Models;
 using Winference.Core.Setup;
+using Winference.Infrastructure.Discover;
 using Winference.Infrastructure.Models;
 
 namespace Winference.App.ViewModels;
@@ -21,7 +22,8 @@ public sealed class ModelEntryViewModel : INotifyPropertyChanged
     private bool _canAct = true;
 
     internal ModelEntryViewModel(ModelCatalogEntry entry, GpuModelRegistration? gpu, HybridModelRegistration? hybrid,
-        SetupModel? npu, GpuCatalogModel? download, bool canRemove) => Update(entry, gpu, hybrid, npu, download, canRemove);
+        SetupModel? npu, GpuCatalogModel? download, bool canRemove, RegistryModel? registry = null) =>
+        Update(entry, gpu, hybrid, npu, download, canRemove, registry);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -30,6 +32,8 @@ public sealed class ModelEntryViewModel : INotifyPropertyChanged
     internal HybridModelRegistration? Hybrid { get; private set; }
     internal SetupModel? Npu { get; private set; }
     internal GpuCatalogModel? Download { get; private set; }
+    /// <summary>A tested GGUF whose exact file is looked up when Get is chosen.</summary>
+    internal RegistryModel? Registry { get; private set; }
     internal string Key => Entry.Profile.ProfileId;
     internal bool CanRemove { get; private set; }
 
@@ -98,9 +102,10 @@ public sealed class ModelEntryViewModel : INotifyPropertyChanged
     }.Where(line => !string.IsNullOrWhiteSpace(line)));
 
     internal void Update(ModelCatalogEntry entry, GpuModelRegistration? gpu, HybridModelRegistration? hybrid,
-        SetupModel? npu, GpuCatalogModel? download, bool canRemove)
+        SetupModel? npu, GpuCatalogModel? download, bool canRemove, RegistryModel? registry = null)
     {
         Entry = entry;
+        Registry = registry;
         Gpu = gpu;
         Hybrid = hybrid;
         Npu = npu;

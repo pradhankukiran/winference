@@ -17,10 +17,12 @@ public sealed partial class ModelListControl : UserControl
     /// <summary>A row's main button was used, so a host such as the chat flyout can close.</summary>
     public event EventHandler? ActionInvoked;
 
-    public ModelListControl(ModelLibraryViewModel library, bool compact)
+    /// <param name="installedOnly">Shows only models on this PC; Discover is where new ones are found.</param>
+    public ModelListControl(ModelLibraryViewModel library, bool compact, bool installedOnly = false)
     {
         Library = library;
         InitializeComponent();
+        if (installedOnly) AvailableSection.Visibility = Visibility.Collapsed;
         var row = (DataTemplate)Resources[compact ? "CompactRowTemplate" : "FullRowTemplate"];
         OnThisPcList.ItemTemplate = row;
         if (compact)

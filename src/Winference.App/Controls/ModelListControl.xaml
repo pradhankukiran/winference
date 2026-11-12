@@ -66,12 +66,14 @@
                     <ItemsControl x:Name="OnThisPcList" ItemsSource="{x:Bind Library.OnThisPc}" IsTabStop="False" Margin="0,-1,0,0"
                                   AutomationProperties.Name="Models on this PC" />
                 </Border>
+                <StackPanel x:Name="AvailableSection" Spacing="8">
                 <TextBlock Text="Available to download" Style="{StaticResource WinferenceSectionTitleStyle}" Margin="0,12,0,0" AutomationProperties.HeadingLevel="Level2"
                            AutomationProperties.AutomationId="AvailableHeading" Visibility="{x:Bind Library.HasAvailable, Mode=OneWay}" />
                 <Border x:Name="AvailableGroup" Style="{StaticResource WinferenceGroupStyle}" Visibility="{x:Bind Library.HasAvailable, Mode=OneWay}">
                     <ItemsControl x:Name="AvailableList" ItemsSource="{x:Bind Library.Available}" IsTabStop="False" Margin="0,-1,0,0"
                                   AutomationProperties.Name="Models available to download" />
                 </Border>
+                </StackPanel>
                 <TextBlock Text="{x:Bind Library.EmptyMessage, Mode=OneWay}" Visibility="{x:Bind Library.IsEmpty, Mode=OneWay}"
                            Style="{StaticResource WinferenceSecondaryTextStyle}" Margin="0,12" HorizontalAlignment="Center"
                            AutomationProperties.AutomationId="ModelListEmpty" AutomationProperties.LiveSetting="Polite" />

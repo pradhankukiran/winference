@@ -79,6 +79,15 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
+    /// <summary>Raised after every refresh, so other views of the same entries can rebuild.</summary>
+    public event EventHandler? EntriesChanged;
+
+    /// <summary>Every listed model, on this PC or not, ignoring this list's own filter and search.</summary>
+    public IReadOnlyList<ModelEntryViewModel> Entries => _entries.Values.ToArray();
+    public long MemoryBytes => _inspection?.MemoryBytes ?? 0;
+    public string HardwareSummary { get; private set; } = string.Empty;
+    public bool IsChecked => _checked;
+
     public ObservableCollection<ModelEntryViewModel> OnThisPc { get; } = [];
     public ObservableCollection<ModelEntryViewModel> Available { get; } = [];
     public bool HasOnThisPc => OnThisPc.Count > 0;
@@ -156,6 +165,7 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             _inspection = inspection;
             _gpuStatus = await gpuRuntimeTask;
             Notice = snapshot.Notice;
+            HardwareSummary = snapshot.HardwareSummary;
             var gpuSupported = inspection.Graphics.Contains("Radeon", StringComparison.OrdinalIgnoreCase);
             Rebuild(ModelCatalogView.Build(snapshot, gpuSupported), await gpuTask, await hybridTask, inspection.Models);
             _checked = true;
@@ -186,8 +196,9 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
                 ? npu.FirstOrDefault(model => profile.Artifact.Id == "flm:" + model.Id) : null;
             var download = _library.GpuCatalog.Models.FirstOrDefault(model => model.Sha256 == profile.Artifact.Sha256);
             var canRemove = _library.CanRemove(profile);
-            if (_entries.TryGetValue(profile.ProfileId, out var existing)) existing.Update(entry, gpuModel, hybridModel, npuModel, download, canRemove);
-            else _entries[profile.ProfileId] = new(entry, gpuModel, hybridModel, npuModel, download, canRemove);
+            var registry = _library.RegistryFor(profile);
+            if (_entries.TryGetValue(profile.ProfileId, out var existing)) existing.Update(entry, gpuModel, hybridModel, npuModel, download, canRemove, registry);
+            else _entries[profile.ProfileId] = new(entry, gpuModel, hybridModel, npuModel, download, canRemove, registry);
         }
         foreach (var stale in _entries.Keys.Where(key => !seen.Contains(key)).ToArray())
             if (!ReferenceEquals(_entries[stale], _downloading)) _entries.Remove(stale);
@@ -207,6 +218,7 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
         foreach (var name in new[] { nameof(HasOnThisPc), nameof(HasAvailable), nameof(IsEmpty), nameof(IsChecking), nameof(EmptyMessage),
             nameof(RecommendedName), nameof(RecommendedDetail), nameof(RecommendedAction), nameof(HasRecommendation),
             nameof(IsUnsupported), nameof(HardwareProblem) }) Changed(name);
+        EntriesChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static void Sync(ObservableCollection<ModelEntryViewModel> target, IEnumerable<ModelEntryViewModel> items)
@@ -301,7 +313,8 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             var lines = new List<string> { $"{StorageCheck.Format(needed)} download · Runs on {entry.Badge}" };
             if (componentBytes > 0) lines.Add($"Includes the {StorageCheck.Format(componentBytes)} component this model needs.");
             lines.Add("You can keep chatting while it downloads.");
-            var terms = entry.Download is { } source ? ("Model source and terms", source.SourcePage) : ((string, Uri)?)null;
+            var terms = entry.Download is { } source ? ("Model source and terms", source.SourcePage)
+                : entry.Registry is { } tested ? ("Model source and terms", new Uri(tested.SourcePage)) : ((string, Uri)?)null;
             if (!await _dialogs.ConfirmAsync($"Get {entry.Name}?", lines.ToArray(), "Get", primaryIsDefault: true, link: terms)) return;
         }
         _download = RunDownloadAsync(entry);
@@ -325,7 +338,7 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
                 await _downloader.DownloadAsync(new(npu.Id, ExecutionMode.NpuOnly, _inspection!.DefaultModelStore, npu.SuggestedContextLength),
                     new Progress<SetupProgress>(value => ReportDownload(entry, DownloadLabel(value.Stage), value.Percent)), cancellation.Token);
             }
-            else if (entry.Download is { } gpu)
+            else if ((entry.Download ?? (entry.Registry is { } tested ? await ResolveAsync(entry, tested, cancellation.Token) : null)) is { } gpu)
             {
                 await _library.DownloadGpuAsync(gpu, new Progress<DownloadProgress>(value =>
                     ReportDownload(entry, value.State == DownloadState.Verifying ? "Verifying…" : "Downloading…", value.Percent)), cancellation.Token);
@@ -357,6 +370,12 @@ public sealed class ModelLibraryViewModel : INotifyPropertyChanged
             _shell.ReportShellError(failure);
         }
         else if (completed && _entries.GetValueOrDefault(entry.Key) is { } finished) Finish(finished);
+    }
+
+    private async Task<GpuCatalogModel> ResolveAsync(ModelEntryViewModel entry, Infrastructure.Discover.RegistryModel tested, CancellationToken token)
+    {
+        ReportDownload(entry, "Finding the exact file…", null);
+        return await _library.ResolveRegistryAsync(tested, token);
     }
 
     /// <summary>Starts the model if nothing is loaded. Otherwise it asks, without interrupting the chat.</summary>

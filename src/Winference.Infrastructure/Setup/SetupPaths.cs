@@ -42,10 +42,12 @@ public sealed record SetupPaths(
         }
         roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".flm"));
         roots.Add(Path.Combine(dataRoot, "Models", "flm"));
+        // A checked, refreshed FastFlowLM list replaces the bundled one, so new models can be set up too.
+        var (catalog, modelInfo) = Discover.CatalogRefreshService.ResolveFlm(dataRoot);
         return new(dataRoot,
             Path.Combine(AppContext.BaseDirectory, "Runtimes", "Lemonade", "lemond.exe"),
-            Path.Combine(AppContext.BaseDirectory, "Catalogs", "catalog.json"),
-            Path.Combine(AppContext.BaseDirectory, "Catalogs", "files.json"),
+            catalog,
+            modelInfo,
             [Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "flm", "flm.exe")],
             roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
     }

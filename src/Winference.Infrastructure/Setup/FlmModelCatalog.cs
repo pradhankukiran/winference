@@ -10,7 +10,8 @@ public sealed record SupplierFile(string Name, long LengthBytes, string? Sha256,
 
 public sealed record CatalogModel(string Id, string DirectoryName, string DisplayName, string Family,
     string Publisher, string Description, int ContextLength, string MinimumRuntimeVersion,
-    IReadOnlyList<SupplierFile> Files, string? UnavailableReason, bool SupportsImages = false)
+    IReadOnlyList<SupplierFile> Files, string? UnavailableReason, bool SupportsImages = false,
+    IReadOnlyList<string>? Labels = null)
 {
     public long? StorageBytes => Files.Count > 0 && Files.All(f => f.LengthBytes > 0) ? Files.Sum(f => f.LengthBytes) : null;
     public string ProviderId => Id.Replace(':', '-') + "-FLM";
@@ -27,8 +28,10 @@ public sealed class FlmModelCatalog
     {
         var catalogBytes = File.ReadAllBytes(catalogPath);
         var metadataBytes = File.ReadAllBytes(modelInfoPath);
-        if (Convert.ToHexStringLower(SHA256.HashData(catalogBytes)) != "6f0ed1c0a988e0dcd83d859c5de0b83584f1604198ceb7e46a1a7e807a87bb92" ||
-            Convert.ToHexStringLower(SHA256.HashData(metadataBytes)) != "650d1a7c48c7e4b946f39e77678eeeb4a1e9eb289bf2be113404db4232408d11")
+        var pinned = Convert.ToHexStringLower(SHA256.HashData(catalogBytes)) == "6f0ed1c0a988e0dcd83d859c5de0b83584f1604198ceb7e46a1a7e807a87bb92" &&
+            Convert.ToHexStringLower(SHA256.HashData(metadataBytes)) == "650d1a7c48c7e4b946f39e77678eeeb4a1e9eb289bf2be113404db4232408d11";
+        // Besides the bundled pair, accept a pair this app fetched and recorded during a refresh.
+        if (!pinned && !(Winference.Infrastructure.Discover.CatalogRefreshService.IsTrusted(catalogPath) && Winference.Infrastructure.Discover.CatalogRefreshService.IsTrusted(modelInfoPath)))
             throw new RuntimeException("catalog_integrity", "The model catalog differs from this build's verified catalog. Restore the complete app folder.");
         using var catalog = JsonDocument.Parse(catalogBytes);
         using var metadata = JsonDocument.Parse(metadataBytes);
@@ -69,7 +72,8 @@ public sealed class FlmModelCatalog
             var description = string.Join(" · ", new[] { String(details, "parameter_size"), String(details, "quantization_level"), Bool(entry, "vlm") ? "Sees images" : labels.Contains("reasoning") ? "Reasoning model" : "Text chat" }.Where(s => !string.IsNullOrEmpty(s)));
             var context = entry.TryGetProperty("default_context_length", out var ctx) && ctx.TryGetInt32(out var value) && value > 256 ? value : 2048;
             models.Add(new(id, directory, directory.Replace("-NPU2", "", StringComparison.Ordinal),
-                String(details, "family") ?? family.Name, "FastFlowLM catalog", description, context, minimum, files, reason, Bool(entry, "vlm")));
+                String(details, "family") ?? family.Name, "FastFlowLM catalog", description, context, minimum, files, reason, Bool(entry, "vlm"),
+                labels.Concat(Bool(entry, "vlm") ? ["vision"] : []).ToArray()));
         }
         return new(models.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray());
     }

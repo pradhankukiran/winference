@@ -27,14 +27,15 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Border Width="24" Height="24" CornerRadius="4" VerticalAlignment="Center"
-                    Background="{ThemeResource AccentFillColorDefaultBrush}">
-                <Viewbox Width="14" Height="14">
-                    <Path Data="M 3,4 L 7,20 L 12,10 L 17,20 L 21,4"
-                          Stroke="{ThemeResource TextOnAccentFillColorPrimaryBrush}" StrokeThickness="2.4"
-                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
-                </Viewbox>
-            </Border>
+            <!-- Same shapes as Assets\Winference.svg; keep the two in step. -->
+            <Viewbox Width="24" Height="24" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw">
+                <Canvas Width="64" Height="64">
+                    <Path Fill="#A78BFA" Data="M22.5,3 h3.2 v7 h-3.2 Z M38.3,3 h3.2 v7 h-3.2 Z M22.5,54 h3.2 v7 h-3.2 Z M38.3,54 h3.2 v7 h-3.2 Z M3,22.5 h7 v3.2 h-7 Z M3,38.3 h7 v3.2 h-7 Z M54,22.5 h7 v3.2 h-7 Z M54,38.3 h7 v3.2 h-7 Z" />
+                    <Rectangle Canvas.Left="9" Canvas.Top="9" Width="46" Height="46" RadiusX="7" RadiusY="7" Fill="#6D28D9" />
+                    <Path Data="M18,21 L24.5,43 L32,29 L39.5,43 L46,21" Stroke="White" StrokeThickness="5.5"
+                          StrokeStartLineCap="Flat" StrokeEndLineCap="Flat" StrokeLineJoin="Miter" StrokeMiterLimit="10" />
+                </Canvas>
+            </Viewbox>
             <TextBlock Grid.Column="1" Text="Winference" Style="{StaticResource BodyStrongTextBlockStyle}" VerticalAlignment="Center" />
             <StackPanel x:Name="ShellActivity" Grid.Column="2" Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right" VerticalAlignment="Center"
                         Visibility="{x:Bind ViewModel.HasActivity, Mode=OneWay}">

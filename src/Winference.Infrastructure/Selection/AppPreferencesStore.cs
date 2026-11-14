@@ -9,10 +9,15 @@ namespace Winference.Infrastructure.Selection;
 /// <param name="SpeechInputModel">Preferred installed Lemonade speech model, if several are installed.</param>
 /// <param name="ImageModel">Preferred installed Lemonade image model.</param>
 /// <param name="Voice">Kokoro voice for Read aloud.</param>
+/// <param name="ServerEnabled">Runs the local server for other apps. Off unless the user turns it on.</param>
 public sealed record AppPreferences(string Theme = "Default", ModelFilter ModelFilter = ModelFilter.All,
     int IdleUnloadMinutes = IdleUnloadPolicy.DefaultMinutes, bool LoadOnStart = false, bool ToolsEnabled = false,
     string? SpeechInputModel = null, string? ImageModel = null, string Voice = Winference.Core.Media.MediaAddons.DefaultVoice,
-    string? EmbeddingModel = null, string CustomInstructions = "", string ResponseStyle = "balanced");
+    string? EmbeddingModel = null, string CustomInstructions = "", string ResponseStyle = "balanced",
+    bool ServerEnabled = false, int ServerPort = AppPreferences.DefaultServerPort)
+{
+    public const int DefaultServerPort = 8484;
+}
 
 public sealed class AppPreferencesStore(string dataRoot)
 {

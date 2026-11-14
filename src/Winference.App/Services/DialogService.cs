@@ -11,14 +11,14 @@ internal sealed class DialogService(Func<XamlRoot> root, DispatcherQueue dispatc
 
     /// <summary>Returns true only if the user chose the primary action.</summary>
     public async Task<bool> ConfirmAsync(string title, string[] lines, string primary,
-        bool primaryIsDefault = false, (string Text, Uri Target)? link = null)
+        bool primaryIsDefault = false, (string Text, Uri Target)? link = null, string close = "Cancel")
     {
         var details = new StackPanel { Spacing = 12 };
         foreach (var line in lines) details.Children.Add(new TextBlock { Text = line, TextWrapping = TextWrapping.Wrap });
         if (link is { } target) details.Children.Add(new HyperlinkButton { Content = target.Text, NavigateUri = target.Target, Padding = new(0) });
         var dialog = new ContentDialog
         {
-            Title = title, Content = details, PrimaryButtonText = primary, CloseButtonText = "Cancel",
+            Title = title, Content = details, PrimaryButtonText = primary, CloseButtonText = close,
             DefaultButton = primaryIsDefault ? ContentDialogButton.Primary : ContentDialogButton.Close
         };
         return await ShowAsync(dialog) == ContentDialogResult.Primary;

@@ -45,6 +45,8 @@ public sealed partial class MainWindow : Window, IShellNavigator
     private readonly Winference.Infrastructure.Lemonade.LemonadeMediaService _media;
     private readonly ReplyMeter _meter = new();
     private readonly ChipActivityViewModel _chip;
+    private readonly DeveloperViewModel _developer;
+    private readonly DeveloperPage _developerPage;
     private ChatPage? _chatPage;
     private bool _started;
     private bool _initialized;
@@ -56,6 +58,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
     [
         new(ShellPage.Discover, "Discover", "\uE774", "NavDiscover"),
         new(ShellPage.Models, "My models", "", "NavModels"),
+        new(ShellPage.Developer, "Developer", "\uE943", "NavDeveloper"),
         new(ShellPage.Settings, "Settings", "", "NavSettings")
     ];
 
@@ -100,6 +103,11 @@ public sealed partial class MainWindow : Window, IShellNavigator
             hybridModels, _hybridRuntime, activeSelection, conversationCatalog, queue, _dialogs, _lifetime, this, features);
         _library.Attach(_session);
         _chip = new ChipActivityViewModel(ViewModel, _meter, queue);
+        var appPermissions = new Winference.Infrastructure.Developer.AppPermissionStore(_dataRoot);
+        var apiHost = new LocalApiHost(ViewModel, queue, _dialogs, _lifetime, appPermissions, _meter,
+            () => ResponseStyles.TemperatureFor(_preferences.Read().ResponseStyle), Activate);
+        _developer = new DeveloperViewModel(apiHost, appPermissions, _preferences, queue);
+        _developerPage = new DeveloperPage(_developer);
         _modelsPage = new ModelsPage(_library);
         _discoverPage = new DiscoverPage(new DiscoverViewModel(_library, catalogs, _lifetime, speeds));
         _modelsPage.DiscoverRequested += (_, _) => ShowShell(ShellPage.Discover);
@@ -155,6 +163,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
         {
             ShellPage.Discover => _discoverPage,
             ShellPage.Models => _modelsPage,
+            ShellPage.Developer => _developerPage,
             ShellPage.Settings => _settingsPage,
             _ => (object?)_chatPage ?? _modelsPage
         };
@@ -162,7 +171,8 @@ public sealed partial class MainWindow : Window, IShellNavigator
         {
             DiscoverPage => NavigationItems[0],
             ModelsPage => NavigationItems[1],
-            SettingsPage => NavigationItems[2],
+            DeveloperPage => NavigationItems[2],
+            SettingsPage => NavigationItems[3],
             _ => null
         };
     }
@@ -175,6 +185,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
         if (_lifetime.IsClosing) return;
         if (_conversations.Warning is { } warning) ViewModel.ReportShellError(warning);
         var opened = await _session.OpenSavedAsync(loadInBackground: _preferences.Read().LoadOnStart);
+        if (!_lifetime.IsClosing) await _developer.StartIfOnAsync();
         if (TestHardware.StartPage() is { } page) ShowShell(page);
         if (opened || _lifetime.IsClosing) return;
         SetupHost.Content = _welcomePage;
@@ -380,6 +391,8 @@ public sealed partial class MainWindow : Window, IShellNavigator
         RootLayout.IsHitTestVisible = false;
         try
         {
+            // Apps stop first, so none of their requests reaches a model that is closing.
+            await _developer.ShutdownAsync();
             if (ViewModel.Chat is { } chat) await chat.ShutdownAsync();
             if (_session.PendingChange is { } changing) await changing;
             if (_library.PendingDownload is { } downloading) await downloading;

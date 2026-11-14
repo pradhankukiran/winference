@@ -1,0 +1,148 @@
+<Page
+    x:Class="Winference.App.Views.DeveloperPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:Winference.App.ViewModels"
+    AutomationProperties.AutomationId="DeveloperPage">
+    <Grid>
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+        <Border Style="{StaticResource WinferencePageHeaderStyle}">
+            <StackPanel MaxWidth="{StaticResource WinferenceContentWidth}">
+                <TextBlock Text="Developer" Style="{StaticResource WinferencePageTitleStyle}"
+                           AutomationProperties.AutomationId="DeveloperHeading" AutomationProperties.HeadingLevel="Level1" />
+                <TextBlock Text="Let other apps on this PC use your model, such as code editors and scripts."
+                           Style="{StaticResource WinferenceCaptionStyle}" />
+            </StackPanel>
+        </Border>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid Padding="{StaticResource WinferencePagePadding}">
+            <StackPanel MaxWidth="{StaticResource WinferenceContentWidth}" Spacing="8">
+                <InfoBar IsOpen="{x:Bind ViewModel.HasError, Mode=OneWay}" IsClosable="False" Severity="Error"
+                         Title="The server didn't start" Message="{x:Bind ViewModel.Error, Mode=OneWay}"
+                         AutomationProperties.AutomationId="ServerError" />
+
+                <Border Style="{StaticResource WinferenceGroupStyle}">
+                    <StackPanel>
+                        <Border Style="{StaticResource WinferenceRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Local server" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock Text="{x:Bind ViewModel.Status, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap"
+                                               AutomationProperties.AutomationId="ServerStatus" AutomationProperties.LiveSetting="Polite" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" MinWidth="0" OnContent="" OffContent=""
+                                              IsOn="{x:Bind ViewModel.IsOn, Mode=TwoWay}"
+                                              AutomationProperties.AutomationId="ServerSwitch" AutomationProperties.Name="Local server" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Address" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock Text="{x:Bind ViewModel.Address, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}"
+                                               IsTextSelectionEnabled="True" FontFamily="Consolas" AutomationProperties.AutomationId="ServerAddress" />
+                                    <TextBlock Text="Use it as the OpenAI base URL. Any API key works: Winference asks you which apps may connect."
+                                               Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="Copy" Click="CopyAddress_Click" VerticalAlignment="Center"
+                                        AutomationProperties.AutomationId="CopyServerAddress" AutomationProperties.Name="Copy server address" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <Grid ColumnSpacing="16">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="Port" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                    <TextBlock Text="Change it if another program already uses this one."
+                                               Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <NumberBox Grid.Column="1" MinWidth="120" VerticalAlignment="Center" Minimum="1024" Maximum="65535"
+                                           SpinButtonPlacementMode="Hidden" ValidationMode="InvalidInputOverwritten"
+                                           Value="{x:Bind ViewModel.Port, Mode=TwoWay}"
+                                           AutomationProperties.AutomationId="ServerPort" AutomationProperties.Name="Port" />
+                            </Grid>
+                        </Border>
+                        <Border Style="{StaticResource WinferenceDividedRowStyle}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="What apps get" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                                <TextBlock Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap"
+                                           Text="Chat replies from the model selected in Winference, streamed or whole, through /v1/chat/completions and /v1/models. Apps take turns with your chat. Function calling isn't supported yet." />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="Apps" Style="{StaticResource WinferenceSectionTitleStyle}" Margin="0,16,0,0" AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Text="An app's first request asks you whether to allow it. Your answer is remembered here."
+                           Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                <Border Style="{StaticResource WinferenceGroupStyle}">
+                    <Grid>
+                        <TextBlock Text="No app has asked yet." Style="{StaticResource WinferenceCaptionStyle}" Margin="16,14"
+                                   Visibility="{x:Bind ViewModel.NoApps, Mode=OneWay}" />
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.Apps}" AutomationProperties.AutomationId="ServerApps">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:AppPermissionItem">
+                                    <Grid ColumnSpacing="12" Padding="16,10" BorderThickness="0,0,0,1"
+                                          BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{x:Bind Detail}" Style="{StaticResource WinferenceCaptionStyle}"
+                                                       TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Detail}" />
+                                            <TextBlock Text="{x:Bind LastUsed}" Style="{StaticResource WinferenceCaptionStyle}" />
+                                        </StackPanel>
+                                        <ToggleSwitch Grid.Column="1" VerticalAlignment="Center" MinWidth="0" OnContent="Allowed" OffContent="Blocked"
+                                                      IsOn="{x:Bind IsAllowed, Mode=TwoWay}" AutomationProperties.Name="{x:Bind SwitchLabel}" />
+                                        <Button Grid.Column="2" Content="Forget" Click="ForgetApp_Click" VerticalAlignment="Center"
+                                                Style="{StaticResource WinferenceSubtleButtonStyle}" AutomationProperties.Name="{x:Bind ForgetLabel}"
+                                                ToolTipService.ToolTip="Forget this app. It will ask again next time." />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+                </Border>
+
+                <Grid Margin="0,16,0,0">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="Recent requests" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
+                        <TextBlock Text="Shown until Winference closes. Nothing here is saved."
+                                   Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Button Content="Clear" Click="ClearLog_Click" HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Style="{StaticResource WinferenceSubtleButtonStyle}" IsEnabled="{x:Bind ViewModel.HasRequests, Mode=OneWay}"
+                            AutomationProperties.AutomationId="ClearServerLog" AutomationProperties.Name="Clear recent requests" />
+                </Grid>
+                <Border Style="{StaticResource WinferenceGroupStyle}">
+                    <Grid>
+                        <TextBlock Text="No requests yet." Style="{StaticResource WinferenceCaptionStyle}" Margin="16,14"
+                                   Visibility="{x:Bind ViewModel.NoRequests, Mode=OneWay}" />
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.Requests}" AutomationProperties.AutomationId="ServerLog">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RequestLogItem">
+                                    <Grid ColumnSpacing="12" Padding="16,8" BorderThickness="0,0,0,1"
+                                          BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                          AutomationProperties.Name="{x:Bind AutomationName}">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="72" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                        <TextBlock Text="{x:Bind Time}" Style="{StaticResource WinferenceCaptionStyle}" />
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock TextTrimming="CharacterEllipsis">
+                                                <Run Text="{x:Bind App}" FontWeight="SemiBold" /><Run Text="  " /><Run Text="{x:Bind Request}" />
+                                            </TextBlock>
+                                            <TextBlock Text="{x:Bind Result}" Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Grid>
+                </Border>
+            </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Page>

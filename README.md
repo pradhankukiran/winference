@@ -43,6 +43,9 @@
 | Edit and resend; regenerate | Engine picked from the model | Search by meaning across your files | Image generation |
 | Export a chat to Markdown | Load on typing, unload when idle | Optional tools that ask before touching files | |
 | Reply speed under every answer | | | |
+| Live NPU, GPU and power use while a reply is written | | | |
+
+**For developers:** a local OpenAI-style server lets apps on this PC, such as code editors and scripts, use your model. Each app asks once, and the Developer page lists recent requests.
 
 ## How it works
 
@@ -83,6 +86,7 @@ Tested on an AMD Ryzen AI 7 350 with Radeon 860M graphics.
 - Chats, settings and models are stored in `%LOCALAPPDATA%\Winference` on your PC.
 - Winference downloads only what you ask for: models, engines and add-ons.
 - There is no telemetry and no account.
+- The local server is off until you turn it on. It only accepts apps on this PC, and asks before each new app connects.
 - Uninstalling asks whether to delete your chats and models too.
 
 ## Requirements
@@ -131,7 +135,7 @@ The installer is written to `artifacts\installer\Winference-Setup-<version>.exe`
 - [ ] Search by meaning on the NPU
 - [ ] Reranker for sharper document answers
 - [ ] Quick-ask hotkey from anywhere in Windows
-- [ ] Local API for tools such as Open WebUI
+- [x] Local API for tools such as Open WebUI
 - [ ] Code-signed installer
 
 ## Credits

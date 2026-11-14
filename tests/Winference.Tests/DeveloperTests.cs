@@ -196,7 +196,7 @@ public sealed class LocalApiServerTests
     public async Task Requests_reach_the_handler_with_their_body()
     {
         LocalApiRequest? seen = null;
-        await using var server = LocalApiServer.Start(0, async (request, response, token) =>
+        await using var server = await LocalApiServer.StartAsync(0, async (request, response, token) =>
         {
             seen = request;
             await response.SendJsonAsync(200, """{"ok":true}""", token);
@@ -214,7 +214,7 @@ public sealed class LocalApiServerTests
     [Fact]
     public async Task Streams_arrive_as_server_sent_events()
     {
-        await using var server = LocalApiServer.Start(0, async (_, response, token) =>
+        await using var server = await LocalApiServer.StartAsync(0, async (_, response, token) =>
         {
             await response.BeginEventStreamAsync(token);
             await response.SendEventAsync("""{"n":1}""", token);
@@ -231,7 +231,7 @@ public sealed class LocalApiServerTests
     public async Task Web_pages_and_other_host_names_are_refused()
     {
         var called = false;
-        await using var server = LocalApiServer.Start(0, (_, response, token) =>
+        await using var server = await LocalApiServer.StartAsync(0, (_, response, token) =>
         {
             called = true;
             return response.SendJsonAsync(200, "{}", token);
@@ -249,7 +249,7 @@ public sealed class LocalApiServerTests
     [Fact]
     public async Task Handler_errors_become_openai_errors()
     {
-        await using var server = LocalApiServer.Start(0, (_, _, _) => throw new ApiException(404, "not_found", "Nothing here."));
+        await using var server = await LocalApiServer.StartAsync(0, (_, _, _) => throw new ApiException(404, "not_found", "Nothing here."));
         using var client = Client(server);
         var reply = await client.GetAsync("v1/nothing");
         Assert.Equal(HttpStatusCode.NotFound, reply.StatusCode);
@@ -262,7 +262,7 @@ public sealed class LocalApiServerTests
     {
         var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var server = LocalApiServer.Start(0, async (_, _, token) =>
+        await using var server = await LocalApiServer.StartAsync(0, async (_, _, token) =>
         {
             using var registration = token.Register(() => cancelled.TrySetResult());
             started.TrySetResult();
@@ -279,12 +279,12 @@ public sealed class LocalApiServerTests
     }
 
     [Fact]
-    public void A_taken_port_gives_a_clear_message()
+    public async Task A_taken_port_gives_a_clear_message()
     {
         using var taken = new TcpListener(IPAddress.Loopback, 0);
         taken.Start();
         var port = ((IPEndPoint)taken.LocalEndpoint).Port;
-        var error = Assert.Throws<RuntimeException>(() => LocalApiServer.Start(port, (_, _, _) => Task.CompletedTask));
+        var error = await Assert.ThrowsAsync<RuntimeException>(() => LocalApiServer.StartAsync(port, (_, _, _) => Task.CompletedTask));
         Assert.Equal("port_unavailable", error.Code);
     }
 
@@ -293,7 +293,7 @@ public sealed class LocalApiServerTests
     {
         if (!OperatingSystem.IsWindows()) return;
         CallerApp? caller = null;
-        await using var server = LocalApiServer.Start(0, (request, response, token) =>
+        await using var server = await LocalApiServer.StartAsync(0, (request, response, token) =>
         {
             caller = CallerLookup.Identify(request.Client, request.ServerPort);
             return response.SendJsonAsync(200, "{}", token);

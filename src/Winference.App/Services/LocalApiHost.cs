@@ -40,7 +40,7 @@ internal sealed class LocalApiHost(
         await StopAsync();
         try
         {
-            _server = LocalApiServer.Start(port, HandleAsync);
+            _server = await LocalApiServer.StartAsync(port, HandleAsync);
             AppDiagnostics.Write("server.started", new { port });
             return null;
         }

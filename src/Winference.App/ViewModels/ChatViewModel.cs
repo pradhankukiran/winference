@@ -57,6 +57,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
     private string? _switchDetail;
     private string _conversationQuery = string.Empty;
     private DateTimeOffset _lastActivityUtc = DateTimeOffset.UtcNow;
+    private string? _externalActivity;
 
     public ChatViewModel(ShellViewModel shell, RuntimeBroker broker, ModelProfile profile, DispatcherQueue dispatcher,
         ConversationSession? history = null, string? modelId = null, Func<CancellationToken, Task>? activateRuntime = null, bool allowLoad = true,
@@ -230,6 +231,53 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
     public Task LoadAsync() => ConnectAsync();
 
+    public string ModelId => _modelId;
+    public RuntimeBroker Broker => _broker;
+
+    /// <summary>Set while an app on this PC is being answered through the local server, for example "Answering Visual Studio Code…".</summary>
+    public string? ExternalActivity
+    {
+        get => _externalActivity;
+        set
+        {
+            if (_externalActivity == value) return;
+            _externalActivity = value;
+            MarkActive();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ConnectionStatus));
+            NotifyStateChanged();
+        }
+    }
+
+    /// <summary>
+    /// Gets the model ready for an app using the local server, loading it if needed, as typing does.
+    /// Wait means the chat is busy and the app should try again shortly.
+    /// </summary>
+    public async Task<(AppReadiness Readiness, string? Reason)> PrepareForAppAsync()
+    {
+        MarkActive();
+        if (!_allowLoad || _disposed) return (AppReadiness.Unavailable, "No model is selected in Winference. Choose one in the app first.");
+        if (_shuttingDown || _shutdownFailed || _cleanupUnconfirmed)
+            return (AppReadiness.Unavailable, "The model in Winference needs attention. Open Winference to check it.");
+        if (_modeTransitioning || _generating || _broker.Snapshot.State is RuntimeState.Generating or RuntimeState.Stopping)
+            return (AppReadiness.Wait, null);
+        if (_broker.Snapshot.State == RuntimeState.Ready)
+        {
+            _snapshot = _broker.Snapshot;
+            return (AppReadiness.Ready, null);
+        }
+        if (_connecting)
+        {
+            await AwaitOperationAsync(_connectTask);
+            return (AppReadiness.Wait, null);
+        }
+        if (!CanConnect) return (AppReadiness.Wait, null);
+        await ConnectAsync();
+        _snapshot = _broker.Snapshot;
+        return _snapshot.State == RuntimeState.Ready ? (AppReadiness.Ready, null)
+            : (AppReadiness.Unavailable, _operationError ?? "The model couldn't load. Open Winference to check it.");
+    }
+
     public ModelProfile Profile => _profile;
     public ConversationCompatibility? ConversationCompatibility => _conversationProfile.ConversationCompatibility;
     public bool IsReady => _snapshot.State == RuntimeState.Ready && _snapshot.Session is not null && !_cleanupUnconfirmed;
@@ -304,7 +352,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         (_snapshot.State == RuntimeState.Ready || _cleanupUnconfirmed || _shutdownFailed);
     public bool CanConnect => _allowLoad && !_shuttingDown && !_shutdownFailed && !_modeTransitioning && !_connecting && !_generating && !_cleanupUnconfirmed &&
         _snapshot.State is RuntimeState.Idle or RuntimeState.Error;
-    public bool CanSend => _allowLoad && !_shuttingDown && !_shutdownFailed && !_generating &&
+    public bool CanSend => _allowLoad && !_shuttingDown && !_shutdownFailed && !_generating && _externalActivity is null &&
         (!string.IsNullOrWhiteSpace(DraftMessage) || PendingImage is not null);
     public bool CanNewChat => !_shuttingDown && !_modeTransitioning && (HasConversation || _shell.HasDraft);
     public bool HasNotice => !string.IsNullOrWhiteSpace(_operationError) || _snapshot.State == RuntimeState.Error;
@@ -341,6 +389,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             if (_snapshot.State == RuntimeState.Stopping) return "Stopping AI";
             if (_connecting) return "Warming up…";
             if (_generating) return "Writing reply…";
+            if (_externalActivity is not null) return _externalActivity;
             if (_snapshot.State == RuntimeState.Ready) return "Ready";
             if (_snapshot.State == RuntimeState.Generating) return "Writing reply…";
             if (_snapshot.State == RuntimeState.Starting) return "Warming up…";
@@ -724,35 +773,42 @@ public sealed class ChatViewModel : INotifyPropertyChanged
                 var deltas = 0;
                 GenerationUsage? usage = null;
                 var temperature = _features?.Temperature() ?? ResponseStyles.DefaultTemperature;
+                var meter = _features?.Meter;
+                meter?.Begin();
                 // No fixed cap: the profile's limit is kept free, and the reply may use the rest of the context.
-                await foreach (var item in _broker.GenerateAsync(messages, null, cancellationToken, temperature))
+                try
                 {
-                    if (!Current()) break;
-                    switch (item.Kind)
+                    await foreach (var item in _broker.GenerateAsync(messages, null, cancellationToken, temperature))
                     {
-                        case GenerationEventKind.TextDelta:
-                            assistantTurn.Status = string.Empty;
-                            firstToken ??= clock.Elapsed;
-                            deltas++;
-                            reply.Append(item.Text);
-                            assistantTurn.Text += item.Text ?? string.Empty;
-                            break;
-                        case GenerationEventKind.ReasoningDelta:
-                            firstToken ??= clock.Elapsed;
-                            deltas++;
-                            assistantTurn.Reasoning += item.Text ?? string.Empty;
-                            break;
-                        case GenerationEventKind.Usage:
-                            usage = item.Usage;
-                            break;
-                        case GenerationEventKind.Completed:
-                        case GenerationEventKind.Cancelled:
-                        case GenerationEventKind.Failed:
-                            terminal = item;
-                            break;
+                        if (!Current()) break;
+                        if (item.Kind is GenerationEventKind.TextDelta or GenerationEventKind.ReasoningDelta) meter?.Tick();
+                        switch (item.Kind)
+                        {
+                            case GenerationEventKind.TextDelta:
+                                assistantTurn.Status = string.Empty;
+                                firstToken ??= clock.Elapsed;
+                                deltas++;
+                                reply.Append(item.Text);
+                                assistantTurn.Text += item.Text ?? string.Empty;
+                                break;
+                            case GenerationEventKind.ReasoningDelta:
+                                firstToken ??= clock.Elapsed;
+                                deltas++;
+                                assistantTurn.Reasoning += item.Text ?? string.Empty;
+                                break;
+                            case GenerationEventKind.Usage:
+                                usage = item.Usage;
+                                break;
+                            case GenerationEventKind.Completed:
+                            case GenerationEventKind.Cancelled:
+                            case GenerationEventKind.Failed:
+                                terminal = item;
+                                break;
+                        }
+                        if (terminal is not null) break;
                     }
-                    if (terminal is not null) break;
                 }
+                finally { meter?.End(); }
 
                 if (!Current()) return;
                 if (firstToken is { } first && terminal?.Kind == GenerationEventKind.Completed)
@@ -1485,6 +1541,8 @@ public sealed class ChatViewModel : INotifyPropertyChanged
     }
 }
 
+public enum AppReadiness { Ready, Wait, Unavailable }
+
 /// <summary>Services the chat uses beyond the model itself.</summary>
 public sealed record ChatFeatures(
     ConversationAttachmentStore Attachments,
@@ -1495,7 +1553,8 @@ public sealed record ChatFeatures(
     string ImagesRoot = "",
     Func<string>? CustomInstructions = null,
     Func<double>? ResponseTemperature = null,
-    Action<string, double>? RecordSpeed = null)
+    Action<string, double>? RecordSpeed = null,
+    ReplyMeter? Meter = null)
 {
     public string Instructions() => CustomInstructions?.Invoke() ?? string.Empty;
     public double Temperature() => ResponseTemperature?.Invoke() ?? ResponseStyles.DefaultTemperature;

@@ -48,6 +48,7 @@ public sealed class ShellViewModel : INotifyPropertyChanged
     public string FriendlyStatus => _chat switch
     {
         { CanLoadModel: false } => "Choose a model",
+        { ExternalActivity: { } activity } => activity,
         { IsGenerating: true } => "Thinking…",
         { IsConnecting: true } => "Loading…",
         { HasErrorNotice: true } => "Needs attention",

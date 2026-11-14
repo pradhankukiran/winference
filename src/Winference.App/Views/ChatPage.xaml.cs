@@ -52,9 +52,12 @@ public sealed partial class ChatPage : Page
         if (ChooseModelButton.IsEnabled) ModelFlyout.ShowAt(ChooseModelButton);
     }
 
-    public ChatPage(ShellViewModel viewModel, ModelLibraryViewModel library, ReadAloudService readAloud)
+    public ChipActivityViewModel Chip { get; }
+
+    public ChatPage(ShellViewModel viewModel, ModelLibraryViewModel library, ReadAloudService readAloud, ChipActivityViewModel chip)
     {
         ViewModel = viewModel;
+        Chip = chip;
         _library = library;
         _readAloud = readAloud;
         InitializeComponent();

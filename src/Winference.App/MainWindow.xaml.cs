@@ -43,6 +43,8 @@ public sealed partial class MainWindow : Window, IShellNavigator
     private readonly WelcomePage _welcomePage;
     private readonly ReadAloudService _readAloud;
     private readonly Winference.Infrastructure.Lemonade.LemonadeMediaService _media;
+    private readonly ReplyMeter _meter = new();
+    private readonly ChipActivityViewModel _chip;
     private ChatPage? _chatPage;
     private bool _started;
     private bool _initialized;
@@ -93,10 +95,11 @@ public sealed partial class MainWindow : Window, IShellNavigator
             () => _preferences.Read().ToolsEnabled, ConfirmToolAsync, mediaSelection, ChatMessageViewModel.ImagesRoot,
             () => _preferences.Read().CustomInstructions,
             () => Winference.Core.Runtime.ResponseStyles.TemperatureFor(_preferences.Read().ResponseStyle),
-            speeds.Record);
+            speeds.Record, _meter);
         _session = new ModelSessionService(ViewModel, _conversations, activations, _setupService, gpuModels, _gpuRuntime,
             hybridModels, _hybridRuntime, activeSelection, conversationCatalog, queue, _dialogs, _lifetime, this, features);
         _library.Attach(_session);
+        _chip = new ChipActivityViewModel(ViewModel, _meter, queue);
         _modelsPage = new ModelsPage(_library);
         _discoverPage = new DiscoverPage(new DiscoverViewModel(_library, catalogs, _lifetime, speeds));
         _modelsPage.DiscoverRequested += (_, _) => ShowShell(ShellPage.Discover);
@@ -134,7 +137,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
 
     void IShellNavigator.ShowChat(bool navigate)
     {
-        _chatPage = new ChatPage(ViewModel, _library, _readAloud);
+        _chatPage = new ChatPage(ViewModel, _library, _readAloud, _chip);
         _chatPage.ChooseModelRequested += (_, _) => ShowShell(ShellPage.Models);
         if (ViewModel.Chat is { } chat) chat.ConversationQuery = ConversationSearch.Text;
         if (navigate) ShowShell(ShellPage.Chat);

@@ -48,6 +48,34 @@
                     <TextBlock Text="{x:Bind ViewModel.FriendlyStatus, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}"
                                AutomationProperties.AutomationId="ChatStatusText" AutomationProperties.LiveSetting="Polite" />
                 </StackPanel>
+                <!-- Live chip view: shown only while a reply is written, for the chat or an app using the local server. -->
+                <StackPanel x:Name="ChipActivity" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"
+                            Visibility="{x:Bind Chip.IsVisible, Mode=OneWay}"
+                            ToolTipService.ToolTip="How hard your NPU and GPU are working right now, the power they use and how fast the reply is written."
+                            AutomationProperties.AutomationId="ChipActivity" AutomationProperties.Name="{x:Bind Chip.Summary, Mode=OneWay}">
+                    <StackPanel.Resources>
+                        <Style x:Key="ChipPillStyle" TargetType="Border">
+                            <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                            <Setter Property="CornerRadius" Value="4" />
+                            <Setter Property="Padding" Value="8,2" />
+                        </Style>
+                    </StackPanel.Resources>
+                    <Border Style="{StaticResource ChipPillStyle}" Visibility="{x:Bind Chip.IsMeasuring, Mode=OneWay}">
+                        <TextBlock Text="Measuring…" Style="{StaticResource WinferenceCaptionStyle}" />
+                    </Border>
+                    <Border Style="{StaticResource ChipPillStyle}" Visibility="{x:Bind Chip.ShowNpu, Mode=OneWay}">
+                        <TextBlock Text="{x:Bind Chip.NpuText, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}" />
+                    </Border>
+                    <Border Style="{StaticResource ChipPillStyle}" Visibility="{x:Bind Chip.ShowGpu, Mode=OneWay}">
+                        <TextBlock Text="{x:Bind Chip.GpuText, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}" />
+                    </Border>
+                    <Border Style="{StaticResource ChipPillStyle}" Visibility="{x:Bind Chip.ShowChip, Mode=OneWay}">
+                        <TextBlock Text="{x:Bind Chip.ChipText, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}" />
+                    </Border>
+                    <Border Style="{StaticResource ChipPillStyle}" Visibility="{x:Bind Chip.ShowSpeed, Mode=OneWay}">
+                        <TextBlock Text="{x:Bind Chip.SpeedText, Mode=OneWay}" Style="{StaticResource WinferenceCaptionStyle}" />
+                    </Border>
+                </StackPanel>
             </StackPanel>
         </Border>
         <Grid Grid.Row="1">

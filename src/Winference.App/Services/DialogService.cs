@@ -47,7 +47,7 @@ internal sealed class DialogService(Func<XamlRoot> root, DispatcherQueue dispatc
     }
 
     /// <summary>The selected window is also the user's one-time permission to read it.</summary>
-    public async Task<WindowReader.Target?> ChooseWindowAsync(IReadOnlyList<WindowReader.Target> windows)
+    public async Task<WindowReader.Target?> ChooseWindowAsync(IReadOnlyList<WindowReader.Target> windows, bool selectionOnly = false)
     {
         if (windows.Count == 0)
         {
@@ -56,12 +56,14 @@ internal sealed class DialogService(Func<XamlRoot> root, DispatcherQueue dispatc
         }
         var choices = new ComboBox { ItemsSource = windows, DisplayMemberPath = nameof(WindowReader.Target.Display), SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         var content = new StackPanel { Spacing = 12 };
-        content.Children.Add(new TextBlock { Text = "Choose the window to read. Its text, including content outside the visible area, may be sent to your local model and saved with your conversation.", TextWrapping = TextWrapping.Wrap });
+        content.Children.Add(new TextBlock { Text = selectionOnly
+            ? "Choose the window containing your selected text. The selection may be sent to your local model and saved with your conversation."
+            : "Choose the window to read. Its text, including content outside the visible area, may be sent to your local model and saved with your conversation.", TextWrapping = TextWrapping.Wrap });
         content.Children.Add(choices);
         var dialog = new ContentDialog
         {
-            Title = "Allow Winference to read a window?", Content = content,
-            PrimaryButtonText = "Read window", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close
+            Title = selectionOnly ? "Use selected text?" : "Allow Winference to read a window?", Content = content,
+            PrimaryButtonText = selectionOnly ? "Use selection" : "Read window", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close
         };
         return await ShowAsync(dialog) == ContentDialogResult.Primary ? choices.SelectedItem as WindowReader.Target : null;
     }

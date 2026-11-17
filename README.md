@@ -49,7 +49,9 @@
 
 ### Ask about an open window
 
-Turn on **Let models use tools** in Settings, then ask a question such as “Explain the error in my other window.” When the model requests the window tool, choose the app and select **Read window**. Winference reads accessible text and tries Windows text recognition on a capture of that window. The text goes to your local model; the picture is not saved. Window text can be incomplete or misread, and small models may not request the tool reliably.
+Choose **Add from window** beside the question box, then choose **Read window**. Select an app and approve reading it. Winference reads accessible text and tries Windows text recognition on a capture of that window. Review the text added to your question before sending it. The picture is not saved, and the text can be incomplete or misread.
+
+To ask about a smaller passage, select text in another app and choose **Add from window → Use selected text**. Winference reads the selection through Windows accessibility and leaves the clipboard alone. Some apps do not expose selections; if no selection is found, the app will say so.
 
 ## How it works
 

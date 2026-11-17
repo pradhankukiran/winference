@@ -95,8 +95,15 @@
                              TextCompositionStarted="AskBox_TextCompositionStarted" TextCompositionEnded="AskBox_TextCompositionEnded"
                              AutomationProperties.AutomationId="AskBox" AutomationProperties.Name="Question"
                              AutomationProperties.HelpText="Enter asks. Shift+Enter adds a new line." />
-                    <Button x:Name="ReadWindowButton" Grid.Column="1" VerticalAlignment="Bottom" Style="{StaticResource WinferenceSubtleButtonStyle}"
-                            Content="Read window" Click="ReadWindow_Click" AutomationProperties.Name="Read an open window" />
+                    <DropDownButton x:Name="ReadWindowButton" Grid.Column="1" VerticalAlignment="Bottom"
+                                    Content="Add from window" AutomationProperties.Name="Add text from an open window">
+                        <DropDownButton.Flyout>
+                            <MenuFlyout>
+                                <MenuFlyoutItem Text="Use selected text" Click="ReadSelection_Click" />
+                                <MenuFlyoutItem Text="Read window" Click="ReadWindow_Click" />
+                            </MenuFlyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
                     <Button x:Name="ModelButton" Grid.Column="2" VerticalAlignment="Bottom" Style="{StaticResource WinferenceSubtleButtonStyle}"
                             ToolTipService.ToolTip="Choose the model that answers (Ctrl+M)" AutomationProperties.AutomationId="ChooseModel"
                             AutomationProperties.Name="Choose a model">

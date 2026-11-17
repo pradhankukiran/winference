@@ -100,6 +100,11 @@
                         <DropDownButton.Flyout>
                             <MenuFlyout>
                                 <MenuFlyoutItem Text="Use selected text" Click="ReadSelection_Click" />
+                                <MenuFlyoutItem Text="Summarize selection" Tag="Summarize the selected text." Click="SelectionAction_Click" />
+                                <MenuFlyoutItem Text="Explain selection" Tag="Explain the selected text in plain language." Click="SelectionAction_Click" />
+                                <MenuFlyoutItem Text="Rewrite selection" Tag="Rewrite the selected text for clarity, preserving its meaning. Return only the rewrite." Click="SelectionAction_Click" />
+                                <MenuFlyoutItem Text="Draft reply to selection" Tag="Draft a reply to the selected text. Return only the reply." Click="SelectionAction_Click" />
+                                <MenuFlyoutSeparator />
                                 <MenuFlyoutItem Text="Read window" Click="ReadWindow_Click" />
                             </MenuFlyout>
                         </DropDownButton.Flyout>

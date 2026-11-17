@@ -177,7 +177,13 @@ public sealed partial class BoardPage : Page
     private async void ReadSelection_Click(object sender, RoutedEventArgs args)
         => await AddWindowTextAsync(selectionOnly: true);
 
-    private async Task AddWindowTextAsync(bool selectionOnly)
+    private async void SelectionAction_Click(object sender, RoutedEventArgs args)
+    {
+        if (sender is MenuFlyoutItem { Tag: string instruction })
+            await AddWindowTextAsync(selectionOnly: true, instruction);
+    }
+
+    private async Task AddWindowTextAsync(bool selectionOnly, string? instruction = null)
     {
         var board = _board;
         if (board is null) return;
@@ -204,6 +210,8 @@ public sealed partial class BoardPage : Page
             }
             var title = root.GetProperty("window").GetString();
             var question = AskBox.Text.Trim();
+            if (instruction is not null)
+                question = question.Length == 0 ? instruction : $"{instruction}\n\n{question}";
             if (question.Length == 0) question = selectionOnly ? "Explain the selected text." : "What is happening in this window?";
             var limited = root.GetProperty("incomplete").GetBoolean() ? " Some content was omitted." : string.Empty;
             AskBox.Text = selectionOnly

@@ -53,6 +53,8 @@ Choose **Add from window** beside the question box, then choose **Read window**.
 
 To ask about a smaller passage, select text in another app and choose **Add from window → Use selected text**. Winference reads the selection through Windows accessibility and leaves the clipboard alone. Some apps do not expose selections; if no selection is found, the app will say so.
 
+For a ready-made prompt, choose **Summarize selection**, **Explain selection**, **Rewrite selection**, or **Draft reply to selection** from the same menu. You can review the prompt and text before sending.
+
 ## How it works
 
 ```mermaid

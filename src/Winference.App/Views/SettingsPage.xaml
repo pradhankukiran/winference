@@ -68,7 +68,7 @@
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                                 <StackPanel Spacing="2" VerticalAlignment="Center">
                                     <TextBlock Text="Let models use tools (experimental)" Style="{StaticResource WinferenceSectionTitleStyle}" AutomationProperties.HeadingLevel="Level2" />
-                                    <TextBlock Text="Models can check the date, this PC's details, and files or folders you allow. Winference asks before each look at your files. Small models may not use tools well."
+                                    <TextBlock Text="Models can check the date, this PC's details, files, folders, and open windows. Winference asks before reading files or a window. Small models may not use tools well."
                                                Style="{StaticResource WinferenceCaptionStyle}" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <ToggleSwitch x:Name="ToolsSwitch" Grid.Column="1" VerticalAlignment="Center" MinWidth="0" OnContent="" OffContent=""

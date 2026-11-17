@@ -47,6 +47,10 @@
 
 **For developers:** a local OpenAI-style server lets apps on this PC, such as code editors and scripts, use your model. Each app asks once, and the Developer page lists recent requests.
 
+### Ask about an open window
+
+Turn on **Let models use tools** in Settings, then ask a question such as “Explain the error in my other window.” When the model requests the window tool, choose the app and select **Read window**. Winference reads accessible text and tries Windows text recognition on a capture of that window. The text goes to your local model; the picture is not saved. Window text can be incomplete or misread, and small models may not request the tool reliably.
+
 ## How it works
 
 ```mermaid

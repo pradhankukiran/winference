@@ -94,6 +94,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
         _readAloud = new ReadAloudService(queue, mediaSelection);
         var tools = new Winference.Core.Tools.ToolExecutionBroker();
         tools.RegisterRange(Winference.Core.Tools.BuiltInTools.GetAll());
+        tools.Register(WindowReader.CreateTool(_dialogs));
         var features = new ChatFeatures(new Winference.Infrastructure.Chat.ConversationAttachmentStore(_dataRoot), tools,
             () => _preferences.Read().ToolsEnabled, ConfirmToolAsync, mediaSelection, ChatMessageViewModel.ImagesRoot,
             () => _preferences.Read().CustomInstructions,

@@ -41,18 +41,18 @@ public sealed partial class MainWindow : Window, IShellNavigator
     private readonly DiscoverPage _discoverPage;
     private readonly SettingsPage _settingsPage;
     private readonly WelcomePage _welcomePage;
-    private readonly ReadAloudService _readAloud;
     private readonly Winference.Infrastructure.Lemonade.LemonadeMediaService _media;
     private readonly ReplyMeter _meter = new();
     private readonly ChipActivityViewModel _chip;
     private readonly DeveloperViewModel _developer;
     private readonly DeveloperPage _developerPage;
-    private ChatPage? _chatPage;
+    private readonly BoardPage _boardPage;
     private bool _started;
     private bool _initialized;
     private bool _cleanupComplete;
 
     public ShellViewModel ViewModel { get; } = new();
+    public BoardsViewModel Boards { get; }
 
     public ShellNavigationItem[] NavigationItems { get; } =
     [
@@ -91,7 +91,6 @@ public sealed partial class MainWindow : Window, IShellNavigator
         _media = new Winference.Infrastructure.Lemonade.LemonadeMediaService(paths.LemonadePath, _dataRoot);
         var mediaSelection = new MediaSelection(_media, _preferences, queue);
         ChatMessageViewModel.ImagesRoot = System.IO.Path.Combine(_dataRoot, "Images");
-        _readAloud = new ReadAloudService(queue, mediaSelection);
         var tools = new Winference.Core.Tools.ToolExecutionBroker();
         tools.RegisterRange(Winference.Core.Tools.BuiltInTools.GetAll());
         tools.Register(WindowReader.CreateTool(_dialogs));
@@ -109,6 +108,11 @@ public sealed partial class MainWindow : Window, IShellNavigator
             () => ResponseStyles.TemperatureFor(_preferences.Read().ResponseStyle), Activate);
         _developer = new DeveloperViewModel(apiHost, appPermissions, _preferences, queue);
         _developerPage = new DeveloperPage(_developer);
+        Boards = new BoardsViewModel(new Winference.Infrastructure.Boards.JsonBoardStore(_dataRoot),
+            new BoardServices(ViewModel, _library, _chip, _meter, () => _preferences.Read().CustomInstructions,
+                () => ResponseStyles.TemperatureFor(_preferences.Read().ResponseStyle), speeds.Record), queue);
+        _boardPage = new BoardPage(Boards, ViewModel, _chip, _library, _dialogs);
+        _boardPage.ManageModelsRequested += (_, _) => ShowShell(ShellPage.Models);
         _modelsPage = new ModelsPage(_library);
         _discoverPage = new DiscoverPage(new DiscoverViewModel(_library, catalogs, _lifetime, speeds));
         _modelsPage.DiscoverRequested += (_, _) => ShowShell(ShellPage.Discover);
@@ -142,18 +146,16 @@ public sealed partial class MainWindow : Window, IShellNavigator
         AppWindow.Closing += AppWindow_Closing;
     }
 
-    bool IShellNavigator.IsChatVisible => ShellLayout.Visibility == Visibility.Visible && ReferenceEquals(PageHost.Content, _chatPage);
+    bool IShellNavigator.IsChatVisible => ShellLayout.Visibility == Visibility.Visible && ReferenceEquals(PageHost.Content, _boardPage);
 
+    /// <summary>The model session calls this once a model is chosen. Boards are where answers happen now.</summary>
     void IShellNavigator.ShowChat(bool navigate)
     {
-        _chatPage = new ChatPage(ViewModel, _library, _readAloud, _chip);
-        _chatPage.ChooseModelRequested += (_, _) => ShowShell(ShellPage.Models);
-        if (ViewModel.Chat is { } chat) chat.ConversationQuery = ConversationSearch.Text;
         if (navigate) ShowShell(ShellPage.Chat);
     }
 
     void IShellNavigator.ShowModels() => ShowShell(ShellPage.Models);
-    void IShellNavigator.FocusComposer() => _chatPage?.FocusComposer();
+    void IShellNavigator.FocusComposer() => _boardPage.FocusAsk();
 
     private void ShowShell(ShellPage page)
     {
@@ -166,7 +168,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
             ShellPage.Models => _modelsPage,
             ShellPage.Developer => _developerPage,
             ShellPage.Settings => _settingsPage,
-            _ => (object?)_chatPage ?? _modelsPage
+            _ => _boardPage
         };
         FooterNavigation.SelectedItem = PageHost.Content switch
         {
@@ -185,6 +187,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
         { ViewModel.ReportShellError("Saved chats could not be opened. Check this app's storage access before closing."); }
         if (_lifetime.IsClosing) return;
         if (_conversations.Warning is { } warning) ViewModel.ReportShellError(warning);
+        await Boards.LoadAsync(_conversations.Workspace);
         var opened = await _session.OpenSavedAsync(loadInBackground: _preferences.Read().LoadOnStart);
         if (!_lifetime.IsClosing) await _developer.StartIfOnAsync();
         if (TestHardware.StartPage() is { } page) ShowShell(page);
@@ -238,13 +241,20 @@ public sealed partial class MainWindow : Window, IShellNavigator
         }
     }
 
-    private void NewChat_Click(object sender, RoutedEventArgs args)
+    private void NewBoard_Click(object sender, RoutedEventArgs args) => OpenNewBoard();
+
+    private void OpenNewBoard()
     {
+        Boards.NewBoard();
         ShowShell(ShellPage.Chat);
-        _chatPage?.FocusComposer();
+        _boardPage.FocusAsk();
     }
 
-    private void Conversation_ItemClick(object sender, ItemClickEventArgs args) => ShowShell(ShellPage.Chat);
+    private void Conversation_ItemClick(object sender, ItemClickEventArgs args)
+    {
+        if (args.ClickedItem is BoardViewModel board) Boards.Active = board;
+        ShowShell(ShellPage.Chat);
+    }
 
     private void SearchToggle_Click(object sender, RoutedEventArgs args)
     {
@@ -273,80 +283,44 @@ public sealed partial class MainWindow : Window, IShellNavigator
 
     private void ConversationSearch_TextChanged(object sender, TextChangedEventArgs args)
     {
-        if (ViewModel.Chat is { } chat) chat.ConversationQuery = ConversationSearch.Text;
+        Boards.Query = ConversationSearch.Text;
     }
 
     private void Conversations_ContextRequested(UIElement sender, ContextRequestedEventArgs args)
     {
-        if (args.OriginalSource is not FrameworkElement { DataContext: ConversationListItem item } source) return;
+        if (args.OriginalSource is not FrameworkElement { DataContext: BoardViewModel board } source) return;
         args.Handled = true;
         // Reusing one menu left its items unresponsive the second time it opened, so each request gets its own.
         var menu = new MenuFlyout();
         var rename = new MenuFlyoutItem { Text = "Rename" };
-        rename.Click += async (_, _) => await RenameConversationAsync(item);
-        AutomationProperties.SetAutomationId(rename, "RenameChat");
+        rename.Click += async (_, _) => await RenameBoardAsync(board);
+        AutomationProperties.SetAutomationId(rename, "RenameBoard");
         var delete = new MenuFlyoutItem { Text = "Delete" };
-        delete.Click += async (_, _) => await DeleteConversationAsync(item);
-        AutomationProperties.SetAutomationId(delete, "DeleteChat");
-        var export = new MenuFlyoutItem { Text = "Export as Markdown…" };
-        export.Click += async (_, _) => await ExportConversationAsync(item);
-        AutomationProperties.SetAutomationId(export, "ExportChat");
+        delete.Click += async (_, _) => await DeleteBoardAsync(board);
+        AutomationProperties.SetAutomationId(delete, "DeleteBoard");
         menu.Items.Add(rename);
-        menu.Items.Add(export);
         menu.Items.Add(delete);
         if (args.TryGetPosition(sender, out var point)) menu.ShowAt(sender, point);
         else menu.ShowAt(source);
     }
 
-    /// <summary>Opens the chat if needed, then saves it as a Markdown file the user picks.</summary>
-    private async Task ExportConversationAsync(ConversationListItem item)
+    private async Task RenameBoardAsync(BoardViewModel board)
     {
-        if (ViewModel.Chat is not { } chat) return;
-        if (chat.SelectedConversation?.Id != item.Id)
-        {
-            if (!chat.CanChooseConversation) return;
-            chat.SelectedConversation = item;
-        }
-        var picker = new Windows.Storage.Pickers.FileSavePicker
-        {
-            SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.DocumentsLibrary,
-            SuggestedFileName = System.IO.Path.GetFileNameWithoutExtension(chat.ExportFileName)
-        };
-        picker.FileTypeChoices.Add("Markdown", new List<string> { ".md" });
-        WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(this));
-        var file = await picker.PickSaveFileAsync();
-        if (file is null) return;
-        try { await System.IO.File.WriteAllTextAsync(file.Path, chat.ExportMarkdown(), new System.Text.UTF8Encoding(false)); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            await _dialogs.InformAsync("The chat wasn't exported", ["It couldn't be saved there. Choose another folder and try again."]);
-        }
-    }
-
-    private async Task RenameConversationAsync(ConversationListItem item)
-    {
-        if (ViewModel.Chat is not { } chat) return;
-        var title = await _dialogs.AskTextAsync("Rename chat", item.Title, "Rename");
-        if (title is not null) chat.RenameConversation(item.Id, title);
+        var title = await _dialogs.AskTextAsync("Rename board", board.Title, "Rename");
+        if (title is not null) Boards.Rename(board, title);
     }
 
     private async void ConversationList_KeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Key != Windows.System.VirtualKey.Delete || ViewModel.Chat?.SelectedConversation is not { } item) return;
+        if (args.Key != Windows.System.VirtualKey.Delete || ConversationList.SelectedItem is not BoardViewModel board) return;
         args.Handled = true;
-        await DeleteConversationAsync(item);
+        await DeleteBoardAsync(board);
     }
 
-    private async Task DeleteConversationAsync(ConversationListItem item)
+    private async Task DeleteBoardAsync(BoardViewModel board)
     {
-        if (ViewModel.Chat is not { } chat) return;
-        if (!chat.CanChooseConversation)
-        {
-            ViewModel.ReportShellError("Wait for the current reply to finish before deleting a chat.");
-            return;
-        }
-        if (await _dialogs.ConfirmAsync($"Delete \"{item.Title}\"?", ["This chat will be permanently removed from this PC."], "Delete"))
-            chat.DeleteConversation(item.Id);
+        if (await _dialogs.ConfirmAsync($"Delete \"{board.Title}\"?", ["This board and all its cards will be permanently removed from this PC."], "Delete"))
+            Boards.Delete(board);
     }
 
     private void FooterNavigation_ItemClick(object sender, ItemClickEventArgs args)
@@ -357,10 +331,7 @@ public sealed partial class MainWindow : Window, IShellNavigator
     private void NewChatShortcut_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
         args.Handled = true;
-        if (ViewModel.Chat is not { CanNewChat: true } chat) return;
-        chat.NewChatCommand.Execute(null);
-        ShowShell(ShellPage.Chat);
-        _chatPage?.FocusComposer();
+        OpenNewBoard();
     }
 
     private void SearchShortcut_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -373,11 +344,17 @@ public sealed partial class MainWindow : Window, IShellNavigator
     {
         args.Handled = true;
         ShowShell(ShellPage.Chat);
-        _chatPage?.OpenModelPicker();
+        _boardPage.OpenModelPicker();
     }
 
     private void StopShortcut_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
+        if (Boards.Active is { IsWriting: true } board)
+        {
+            args.Handled = true;
+            board.StopWriting();
+            return;
+        }
         if (ViewModel.Chat is not { CanStopReply: true } chat) return;
         args.Handled = true;
         chat.StopCommand.Execute(null);
@@ -394,11 +371,12 @@ public sealed partial class MainWindow : Window, IShellNavigator
         {
             // Apps stop first, so none of their requests reaches a model that is closing.
             await _developer.ShutdownAsync();
+            Boards.Active?.StopWriting();
+            await Boards.FlushAsync();
             if (ViewModel.Chat is { } chat) await chat.ShutdownAsync();
             if (_session.PendingChange is { } changing) await changing;
             if (_library.PendingDownload is { } downloading) await downloading;
             await _conversations.FlushAsync();
-            _readAloud.Dispose();
             await _media.DisposeAsync();
             _cleanupComplete = true;
             Close();

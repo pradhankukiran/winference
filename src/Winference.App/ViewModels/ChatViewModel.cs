@@ -613,6 +613,14 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
     private void MarkActive() => _lastActivityUtc = DateTimeOffset.UtcNow;
 
+    /// <summary>Starts loading the model in the background, as typing in the chat used to, so it's ready when a question is sent.</summary>
+    public void WarmUp()
+    {
+        MarkActive();
+        if (CanConnect && _snapshot.State == RuntimeState.Idle && string.IsNullOrWhiteSpace(_operationError))
+            Observe(ConnectAsync());
+    }
+
     /// <summary>
     /// The model wakes when someone starts typing, so most of the load is over by the time they
     /// send. A failed load waits for an explicit Retry instead of restarting on every keystroke.

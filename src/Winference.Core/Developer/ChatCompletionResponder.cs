@@ -105,41 +105,15 @@ public static class ChatCompletionResponder
         return new(status, stopped ? "Stopped" : "Failed: " + message, usage?.PromptTokens, completion, rate);
     }
 
-    /// <summary>
-    /// Starts the reply and reads its first event, so problems found before any text
-    /// (a busy model, a message the engine refuses) can still be sent as a plain error.
-    /// </summary>
     private static async Task<IAsyncEnumerator<GenerationEvent>> OpenAsync(RuntimeBroker broker, IReadOnlyList<ChatMessage> messages,
         int? maxTokens, double temperature, TimeSpan busyWait, CancellationToken cancellationToken)
     {
-        var waited = System.Diagnostics.Stopwatch.StartNew();
-        while (true)
+        try { return await Boards.BrokerQueue.OpenAsync(broker, messages, maxTokens, temperature, busyWait, cancellationToken).ConfigureAwait(false); }
+        catch (RuntimeException error) when (error.Code == "Busy")
         {
-            var stream = broker.GenerateAsync(messages, maxTokens, cancellationToken, temperature).GetAsyncEnumerator(cancellationToken);
-            try
-            {
-                if (await stream.MoveNextAsync().ConfigureAwait(false)) return stream;
-                await stream.DisposeAsync().ConfigureAwait(false);
-                throw new ApiException(500, "reply_failed", "The model ended the reply before it started.");
-            }
-            catch (RuntimeException error) when (error.Code == "Busy")
-            {
-                await stream.DisposeAsync().ConfigureAwait(false);
-                if (waited.Elapsed >= busyWait)
-                    throw new ApiException(503, "model_busy", "The model is busy with another reply. Try again shortly.");
-                await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
-            }
-            catch (RuntimeException error)
-            {
-                await stream.DisposeAsync().ConfigureAwait(false);
-                throw ToApiError(error);
-            }
-            catch
-            {
-                await stream.DisposeAsync().ConfigureAwait(false);
-                throw;
-            }
+            throw new ApiException(503, "model_busy", "The model is busy with another reply. Try again shortly.");
         }
+        catch (RuntimeException error) { throw ToApiError(error); }
     }
 
     public static ApiException ToApiError(RuntimeException error) => error.Code switch

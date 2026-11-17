@@ -85,37 +85,35 @@
                     </Grid.RowDefinitions>
                     <Grid ColumnSpacing="4">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                        <Button x:Name="NewConversationAction" Style="{StaticResource WinferenceSubtleButtonStyle}"
-                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="12,8"
-                                Command="{x:Bind ViewModel.Chat.NewChatCommand, Mode=OneWay}" Click="NewChat_Click"
-                                IsEnabled="{x:Bind ViewModel.Chat.CanNewChat, Mode=OneWay}"
-                                AutomationProperties.AutomationId="NewChat" AutomationProperties.Name="New chat"
-                                AutomationProperties.HelpText="Start a new conversation. Earlier chats are kept.">
+                        <Button x:Name="NewBoardAction" Style="{StaticResource WinferenceSubtleButtonStyle}"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="12,8" Click="NewBoard_Click"
+                                AutomationProperties.AutomationId="NewBoard" AutomationProperties.Name="New board"
+                                AutomationProperties.HelpText="Start a new board. Earlier boards are kept." ToolTipService.ToolTip="New board (Ctrl+N)">
                             <StackPanel Orientation="Horizontal" Spacing="12">
                                 <FontIcon Glyph="&#xE710;" FontSize="14" />
-                                <TextBlock Text="New chat" />
+                                <TextBlock Text="New board" />
                             </StackPanel>
                         </Button>
                         <Button Grid.Column="1" Click="SearchToggle_Click" Style="{StaticResource WinferenceSubtleButtonStyle}" Padding="10,8"
-                                ToolTipService.ToolTip="Search chats (Ctrl+F)" AutomationProperties.AutomationId="SearchChats"
-                                AutomationProperties.Name="Search chats">
+                                ToolTipService.ToolTip="Search boards (Ctrl+F)" AutomationProperties.AutomationId="SearchBoards"
+                                AutomationProperties.Name="Search boards">
                             <FontIcon Glyph="&#xE721;" FontSize="14" />
                         </Button>
                     </Grid>
-                    <TextBox x:Name="ConversationSearch" Grid.Row="1" PlaceholderText="Search chats" Visibility="Collapsed"
+                    <TextBox x:Name="ConversationSearch" Grid.Row="1" PlaceholderText="Search boards" Visibility="Collapsed"
                              TextChanged="ConversationSearch_TextChanged" KeyDown="ConversationSearch_KeyDown"
-                             AutomationProperties.AutomationId="ConversationSearch" AutomationProperties.Name="Search chats" />
+                             AutomationProperties.AutomationId="BoardSearch" AutomationProperties.Name="Search boards" />
                     <ListView x:Name="ConversationList" Grid.Row="2" SelectionMode="Single" IsItemClickEnabled="True" ItemClick="Conversation_ItemClick"
                               ContextRequested="Conversations_ContextRequested" KeyDown="ConversationList_KeyDown"
                               ItemContainerStyle="{StaticResource WinferenceSidebarItemStyle}"
-                              ItemsSource="{x:Bind ViewModel.Chat.Conversations, Mode=OneWay}"
-                              SelectedItem="{x:Bind ViewModel.Chat.SelectedConversation, Mode=TwoWay}"
-                              AutomationProperties.AutomationId="ConversationHistory" AutomationProperties.Name="Saved conversations"
-                              AutomationProperties.HelpText="Saved conversations on this PC. Choose one to open it.">
+                              ItemsSource="{x:Bind Boards.Boards}"
+                              SelectedItem="{x:Bind Boards.Active, Mode=TwoWay}"
+                              AutomationProperties.AutomationId="BoardList" AutomationProperties.Name="Boards"
+                              AutomationProperties.HelpText="Boards saved on this PC. Choose one to open it.">
                         <ListView.ItemTemplate><DataTemplate>
                             <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis"
                                        ToolTipService.ToolTip="{Binding Title}"
-                                       AutomationProperties.AutomationId="HistoryConversationId" AutomationProperties.HelpText="{Binding Identity}" />
+                                       AutomationProperties.AutomationId="BoardTitle" />
                         </DataTemplate></ListView.ItemTemplate>
                     </ListView>
                     <ListView x:Name="FooterNavigation" Grid.Row="3" SelectionMode="Single" IsItemClickEnabled="True"

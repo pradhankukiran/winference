@@ -35,6 +35,9 @@ public sealed class ChipActivityViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
+    /// <summary>Raised on the UI thread with each new reading, so a reply can add up the energy it used.</summary>
+    public event EventHandler<ChipSample>? Sampled;
+
     public bool IsVisible => _visible;
     public bool IsMeasuring => _visible && _sample is null && _speed is null;
 
@@ -78,7 +81,11 @@ public sealed class ChipActivityViewModel : INotifyPropertyChanged
         {
             var sample = await Task.Run(() => _monitor.Value?.Sample());
             if (!_visible) return;
-            if (sample is not null) _sample = sample;
+            if (sample is not null)
+            {
+                _sample = sample;
+                Sampled?.Invoke(this, sample);
+            }
             _speed = _meter.TokensPerSecond ?? _speed;
             Changed();
         }

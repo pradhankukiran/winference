@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Winference.Core.Runtime;
+using Winference.Core.Templates;
 
 namespace Winference.Infrastructure.Gpu;
 
@@ -19,7 +20,9 @@ internal sealed unsafe class LlamaEngine : IDisposable
     private readonly IntPtr _context;
     private readonly IntPtr _vocab;
     private readonly IntPtr _batch;
-    private readonly byte* _template;
+    private readonly ChatTemplate _template;
+    private readonly bool _addsBos;
+    private readonly int _bos;
     private readonly int _contextLength;
     private readonly int _batchSize;
     /// <summary>The tokens already in the engine's memory, in order. A new prompt that starts the same way skips them.</summary>
@@ -28,11 +31,13 @@ internal sealed unsafe class LlamaEngine : IDisposable
 
     public GpuWorkerReady Ready { get; }
 
-    private LlamaEngine(IntPtr devices, IntPtr model, IntPtr context, IntPtr vocab, IntPtr batch, byte* template,
+    private LlamaEngine(IntPtr devices, IntPtr model, IntPtr context, IntPtr vocab, IntPtr batch, ChatTemplate template,
         int contextLength, GpuWorkerReady ready)
     {
         _devices = devices; _model = model; _context = context; _vocab = vocab; _batch = batch;
         _template = template; _contextLength = contextLength; Ready = ready;
+        _addsBos = LlamaNative.VocabAddsBos(vocab) != 0;
+        _bos = LlamaNative.VocabBos(vocab);
         _batchSize = (int)LlamaNative.BatchSize(context);
     }
 
@@ -69,9 +74,8 @@ internal sealed unsafe class LlamaEngine : IDisposable
             if (LlamaNative.ContextSize(context) < contextLength)
                 throw new RuntimeException("gpu_context_create", "The GPU engine could not reserve the selected conversation length.");
 
-            var template = LlamaNative.ModelChatTemplate(model, null);
-            if (template is null)
-                throw new RuntimeException("gpu_template", "This model file has no chat format, so it cannot be used for chat.");
+            var vocab = LlamaNative.ModelGetVocab(model);
+            var template = ReadTemplate(model, vocab);
             var batch = LlamaNative.BatchInit(context);
             if (batch == IntPtr.Zero) throw new RuntimeException("gpu_context_create", "The GPU engine could not prepare its input buffer.");
 
@@ -81,7 +85,7 @@ internal sealed unsafe class LlamaEngine : IDisposable
             var ready = new GpuWorkerReady(Environment.ProcessId, LlamaNative.Text(LlamaNative.Version()) ?? "unknown",
                 "Vulkan", description, memory, LlamaNative.ModelLayerCount(model), contextLength,
                 LlamaNative.ModelTrainedContext(model), Encoding.UTF8.GetString(nameBuffer, 0, Math.Clamp(length, 0, nameBuffer.Length)));
-            return new LlamaEngine(devices, model, context, LlamaNative.ModelGetVocab(model), batch, template, contextLength, ready);
+            return new LlamaEngine(devices, model, context, vocab, batch, template, contextLength, ready);
         }
         catch
         {
@@ -118,7 +122,7 @@ internal sealed unsafe class LlamaEngine : IDisposable
         try
         {
             var decoder = Encoding.UTF8.GetDecoder();
-            var splitter = new ReasoningSplitter(startInReasoning: EndsWithOpenThink(rendered));
+            var splitter = new ReasoningSplitter(startInReasoning: EndsWithOpenThink(ChatTemplate.Join(rendered)));
             var piece = new byte[256];
             var characters = new char[512];
             var generated = 0;
@@ -202,64 +206,59 @@ internal sealed unsafe class LlamaEngine : IDisposable
         foreach (var token in tokens) _cached.Add(token);
     }
 
-    private string Render(IReadOnlyList<GpuWorkerMessage> messages)
+    /// <summary>Renders the model's own chat template. The tokenizer adds bos itself, so a template's leading bos is dropped.</summary>
+    private IReadOnlyList<PromptPart> Render(IReadOnlyList<GpuWorkerMessage> messages)
     {
         if (messages.Count == 0) throw new RuntimeException("invalid_message", "Write a message before sending.");
-        var strings = new List<IntPtr>(messages.Count * 2);
-        var chat = new LlamaChatMessage[messages.Count];
         try
         {
-            var total = 0L;
-            for (var i = 0; i < messages.Count; i++)
-            {
-                var role = Marshal.StringToCoTaskMemUTF8(messages[i].Role);
-                var content = Marshal.StringToCoTaskMemUTF8(messages[i].Content);
-                strings.Add(role); strings.Add(content);
-                chat[i] = new LlamaChatMessage { Role = role, Content = content };
-                total += Encoding.UTF8.GetByteCount(messages[i].Content) + 64;
-            }
-            var buffer = new byte[checked((int)Math.Min(int.MaxValue / 2, total * 2 + 1024))];
-            fixed (LlamaChatMessage* list = chat)
-            {
-                var length = Apply(list, chat.Length, buffer);
-                if (length > buffer.Length)
-                {
-                    buffer = new byte[length];
-                    length = Apply(list, chat.Length, buffer);
-                }
-                if (length < 0 || length > buffer.Length)
-                    throw new RuntimeException("gpu_template", "This model's chat format is not supported by the GPU engine yet.");
-                return Encoding.UTF8.GetString(buffer, 0, length);
-            }
+            return _template.Render([.. messages.Select(message => new ChatTemplateMessage(message.Role, message.Content))],
+                addGenerationPrompt: true, removeLeadingBos: _addsBos);
         }
-        finally { foreach (var item in strings) Marshal.FreeCoTaskMem(item); }
+        catch (TemplateException error)
+        {
+            throw new RuntimeException("gpu_template", "This model's chat format refused the conversation: " + error.Message);
+        }
     }
 
-    private int Apply(LlamaChatMessage* list, int count, byte[] buffer)
+    /// <summary>
+    /// Template text is read with special markers on; text the user wrote is read with them off,
+    /// so a typed "&lt;|im_end|&gt;" stays plain text instead of ending the turn.
+    /// </summary>
+    private int[] Tokenize(IReadOnlyList<PromptPart> parts)
     {
-        fixed (byte* output = buffer) return LlamaNative.ChatApplyTemplate(_template, list, (nuint)count, 1, output, buffer.Length);
+        var tokens = new List<int>();
+        if (_addsBos) tokens.Add(_bos);
+        foreach (var part in parts)
+        {
+            var bytes = Encoding.UTF8.GetBytes(part.Text);
+            if (bytes.Length == 0) continue;
+            var special = (byte)(part.IsInput ? 0 : 1);
+            fixed (byte* input = bytes)
+            {
+                var needed = -LlamaNative.Tokenize(_vocab, input, bytes.Length, null, 0, 0, special);
+                if (needed <= 0) continue;
+                var piece = new int[needed];
+                fixed (int* output = piece)
+                    if (LlamaNative.Tokenize(_vocab, input, bytes.Length, output, piece.Length, 0, special) != needed)
+                        throw new RuntimeException("gpu_tokenize", "The GPU engine could not read this message.");
+                tokens.AddRange(piece);
+            }
+        }
+        if (tokens.Count == 0) throw new RuntimeException("gpu_tokenize", "The GPU engine could not read this message.");
+        return [.. tokens];
     }
 
-    private int[] Tokenize(string text)
+    private static ChatTemplate ReadTemplate(IntPtr model, IntPtr vocab)
     {
-        var bytes = Encoding.UTF8.GetBytes(text);
-        int[] tokens;
-        fixed (byte* input = bytes)
+        var source = LlamaNative.Text(LlamaNative.ModelChatTemplate(model, null))
+            ?? throw new RuntimeException("gpu_template", "This model file has no chat format, so it cannot be used for chat.");
+        string TokenText(int token) => token >= 0 ? LlamaNative.Text(LlamaNative.VocabGetText(vocab, token)) ?? "" : "";
+        try { return ChatTemplate.Parse(source, TokenText(LlamaNative.VocabBos(vocab)), TokenText(LlamaNative.VocabEos(vocab))); }
+        catch (TemplateException error)
         {
-            // The template writes the model's special markers as text, so they are parsed, not added again.
-            var needed = -LlamaNative.Tokenize(_vocab, input, bytes.Length, null, 0, 0, 1);
-            if (needed <= 0) throw new RuntimeException("gpu_tokenize", "The GPU engine could not read this message.");
-            tokens = new int[needed];
-            fixed (int* output = tokens)
-                if (LlamaNative.Tokenize(_vocab, input, bytes.Length, output, tokens.Length, 0, 1) != needed)
-                    throw new RuntimeException("gpu_tokenize", "The GPU engine could not read this message.");
+            throw new RuntimeException("gpu_template", "This model's chat format could not be read: " + error.Message);
         }
-        if (LlamaNative.VocabAddsBos(_vocab) != 0)
-        {
-            var bos = LlamaNative.VocabBos(_vocab);
-            if (tokens[0] != bos) tokens = [bos, .. tokens];
-        }
-        return tokens;
     }
 
     private int Piece(int token, ref byte[] buffer)

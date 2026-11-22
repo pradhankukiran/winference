@@ -70,13 +70,6 @@ internal struct LlamaContextParams
     public IntPtr OtherContext;
 }
 
-[StructLayout(LayoutKind.Sequential)]
-internal struct LlamaChatMessage
-{
-    public IntPtr Role;
-    public IntPtr Content;
-}
-
 /// <summary>
 /// The llama.cpp functions Winference calls. Each one is looked up by name in the pinned
 /// llama.dll, ggml.dll or ggml-base.dll, so a missing export fails at load, not mid-chat.
@@ -131,10 +124,11 @@ internal static unsafe class LlamaNative
     public static delegate* unmanaged[Cdecl]<IntPtr, int, IntPtr, int> Process;
     public static delegate* unmanaged[Cdecl]<IntPtr, int, byte> VocabIsEndOfGeneration;
     public static delegate* unmanaged[Cdecl]<IntPtr, int> VocabBos;
+    public static delegate* unmanaged[Cdecl]<IntPtr, int> VocabEos;
+    public static delegate* unmanaged[Cdecl]<IntPtr, int, byte*> VocabGetText;
     public static delegate* unmanaged[Cdecl]<IntPtr, byte> VocabAddsBos;
     public static delegate* unmanaged[Cdecl]<IntPtr, byte*, int, int*, int, byte, byte, int> Tokenize;
     public static delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, int, byte, int> TokenToPiece;
-    public static delegate* unmanaged[Cdecl]<byte*, LlamaChatMessage*, nuint, byte, byte*, int, int> ChatApplyTemplate;
     public static delegate* unmanaged[Cdecl]<byte, IntPtr> SamplerChainInit;
     public static delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void> SamplerChainAdd;
     public static delegate* unmanaged[Cdecl]<int, IntPtr> SamplerTopK;
@@ -201,10 +195,11 @@ internal static unsafe class LlamaNative
         Process = (delegate* unmanaged[Cdecl]<IntPtr, int, IntPtr, int>)Export("llama_process");
         VocabIsEndOfGeneration = (delegate* unmanaged[Cdecl]<IntPtr, int, byte>)Export("llama_vocab_is_eog");
         VocabBos = (delegate* unmanaged[Cdecl]<IntPtr, int>)Export("llama_vocab_bos");
+        VocabEos = (delegate* unmanaged[Cdecl]<IntPtr, int>)Export("llama_vocab_eos");
+        VocabGetText = (delegate* unmanaged[Cdecl]<IntPtr, int, byte*>)Export("llama_vocab_get_text");
         VocabAddsBos = (delegate* unmanaged[Cdecl]<IntPtr, byte>)Export("llama_vocab_get_add_bos");
         Tokenize = (delegate* unmanaged[Cdecl]<IntPtr, byte*, int, int*, int, byte, byte, int>)Export("llama_tokenize");
         TokenToPiece = (delegate* unmanaged[Cdecl]<IntPtr, int, byte*, int, int, byte, int>)Export("llama_token_to_piece");
-        ChatApplyTemplate = (delegate* unmanaged[Cdecl]<byte*, LlamaChatMessage*, nuint, byte, byte*, int, int>)Export("llama_chat_apply_template");
         SamplerChainInit = (delegate* unmanaged[Cdecl]<byte, IntPtr>)Export("llama_sampler_chain_init");
         SamplerChainAdd = (delegate* unmanaged[Cdecl]<IntPtr, IntPtr, void>)Export("llama_sampler_chain_add");
         SamplerTopK = (delegate* unmanaged[Cdecl]<int, IntPtr>)Export("llama_sampler_init_top_k");

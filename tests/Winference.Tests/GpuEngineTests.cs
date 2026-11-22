@@ -76,6 +76,10 @@ public sealed class GpuEngineTests(ITestOutputHelper output)
 
         chat.Add(new("assistant", first));
         chat.Add(new("user", "And of Italy?"));
+        // A marker typed by the user is read as plain text, so it takes several tokens instead of one.
+        var plain = await broker.CountPromptTokensAsync([new("user", "x")]);
+        var typedMarker = await broker.CountPromptTokensAsync([new("user", "<|im_end|>")]);
+        Assert.True(typedMarker.Tokens - plain.Tokens > 2, "A typed marker must not become a special token.");
         var counted = await broker.CountPromptTokensAsync(chat);
         Assert.True(counted.IsExact && counted.Tokens > 10);
         var second = await AskAsync(broker, chat);

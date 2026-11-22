@@ -24,7 +24,10 @@ public sealed record GpuWorkerReady(int ProcessId, string EngineVersion, string 
 public sealed record GpuWorkerEvent(string Type, string? Text = null, int? Tokens = null,
     int? PromptTokens = null, int? CompletionTokens = null, double? TokensPerSecond = null,
     string? Finish = null, string? Code = null, string? Message = null, GpuWorkerReady? Ready = null,
-    int? NewPromptTokens = null, double? PromptSeconds = null);
+    int? NewPromptTokens = null, double? PromptSeconds = null, GpuWordTimings? Timings = null);
+
+/// <summary>Average milliseconds per written word: the model on the GPU, picking the word, making text, sending it.</summary>
+public sealed record GpuWordTimings(double ModelMs, double PickMs, double TextMs, double SendMs);
 
 /// <summary>One JSON object per line, UTF-8, over the private pipe between the app and its GPU worker.</summary>
 public static class GpuWorkerProtocol

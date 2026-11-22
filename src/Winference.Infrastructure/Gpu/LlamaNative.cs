@@ -122,6 +122,7 @@ internal static unsafe class LlamaNative
     public static delegate* unmanaged[Cdecl]<IntPtr, int, int*, byte> BatchSetPosition;
     public static delegate* unmanaged[Cdecl]<IntPtr, int, byte, byte> BatchSetOutputLogits;
     public static delegate* unmanaged[Cdecl]<IntPtr, int, IntPtr, int> Process;
+    public static delegate* unmanaged[Cdecl]<IntPtr, void> Synchronize;
     public static delegate* unmanaged[Cdecl]<IntPtr, int, byte> VocabIsEndOfGeneration;
     public static delegate* unmanaged[Cdecl]<IntPtr, int> VocabBos;
     public static delegate* unmanaged[Cdecl]<IntPtr, int> VocabEos;
@@ -193,6 +194,7 @@ internal static unsafe class LlamaNative
         BatchSetPosition = (delegate* unmanaged[Cdecl]<IntPtr, int, int*, byte>)Export("llama_batch_ext_set_pos");
         BatchSetOutputLogits = (delegate* unmanaged[Cdecl]<IntPtr, int, byte, byte>)Export("llama_batch_ext_set_output_logits");
         Process = (delegate* unmanaged[Cdecl]<IntPtr, int, IntPtr, int>)Export("llama_process");
+        Synchronize = (delegate* unmanaged[Cdecl]<IntPtr, void>)Export("llama_synchronize");
         VocabIsEndOfGeneration = (delegate* unmanaged[Cdecl]<IntPtr, int, byte>)Export("llama_vocab_is_eog");
         VocabBos = (delegate* unmanaged[Cdecl]<IntPtr, int>)Export("llama_vocab_bos");
         VocabEos = (delegate* unmanaged[Cdecl]<IntPtr, int>)Export("llama_vocab_eos");

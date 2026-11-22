@@ -90,6 +90,8 @@ public sealed class GpuEngineTests(ITestOutputHelper output)
 
         // A longer reply, for a reply speed comparable to llama-bench's 128-token test.
         await AskAsync(broker, [new("user", "Write a long story about a lighthouse keeper.")], 128);
+        if (backend.LastUsage?.Timings is { } time)
+            output.WriteLine($"Per word: model {time.ModelMs:0.00} ms, pick {time.PickMs:0.00} ms, text {time.TextMs:0.000} ms, send {time.SendMs:0.000} ms");
 
         // Stop mid-reply: the model stays loaded and answers the next message straight away.
         using var stop = new CancellationTokenSource();

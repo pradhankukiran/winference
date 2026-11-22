@@ -127,19 +127,38 @@ internal sealed unsafe class LlamaEngine : IDisposable
             var characters = new char[512];
             var generated = 0;
             var finish = "length";
+            // Where each word's time goes: the model on the GPU, picking the word, turning it into text, sending it.
+            long modelTicks = 0, pickTicks = 0, textTicks = 0, sendTicks = 0;
             Stopwatch? writing = null;
             while (generated < limit)
             {
                 if (cancelled()) { send(new("cancelled")); return; }
+                var mark = Stopwatch.GetTimestamp();
+                LlamaNative.Synchronize(_context); // waits only for what the GPU has not finished yet
+                modelTicks += Stopwatch.GetTimestamp() - mark;
+                mark = Stopwatch.GetTimestamp();
                 var token = LlamaNative.SamplerSample(sampler, _context, -1);
+                pickTicks += Stopwatch.GetTimestamp() - mark;
                 if (LlamaNative.VocabIsEndOfGeneration(_vocab, token) != 0) { finish = "stop"; break; }
                 writing ??= Stopwatch.StartNew();
                 generated++;
+                var last = generated == limit || _cached.Count + 1 > _contextLength;
+                if (!last)
+                {
+                    // Start the GPU on the next word first, then make and send this word's text while it works.
+                    mark = Stopwatch.GetTimestamp();
+                    Decode([token], _cached.Count, outputLast: true);
+                    modelTicks += Stopwatch.GetTimestamp() - mark;
+                }
+                mark = Stopwatch.GetTimestamp();
                 var bytes = Piece(token, ref piece);
                 var chars = decoder.GetChars(piece, 0, bytes, characters, 0, flush: false);
-                Send(splitter.Push(new string(characters, 0, chars)), send);
-                if (generated == limit || _cached.Count + 1 > _contextLength) break;
-                Decode([token], _cached.Count, outputLast: true);
+                var pieces = splitter.Push(new string(characters, 0, chars));
+                textTicks += Stopwatch.GetTimestamp() - mark;
+                mark = Stopwatch.GetTimestamp();
+                Send(pieces, send);
+                sendTicks += Stopwatch.GetTimestamp() - mark;
+                if (last) break;
             }
             var tail = decoder.GetChars([], 0, 0, characters, 0, flush: true);
             if (tail > 0) Send(splitter.Push(new string(characters, 0, tail)), send);
@@ -147,11 +166,15 @@ internal sealed unsafe class LlamaEngine : IDisposable
             double? speed = writing is { } clock && generated > 1 && clock.Elapsed.TotalSeconds > 0
                 ? (generated - 1) / clock.Elapsed.TotalSeconds : null;
             send(new("usage", PromptTokens: prompt.Length, CompletionTokens: generated, TokensPerSecond: speed,
-                NewPromptTokens: prompt.Length - reused, PromptSeconds: promptSeconds));
+                NewPromptTokens: prompt.Length - reused, PromptSeconds: promptSeconds,
+                Timings: generated > 0 ? new GpuWordTimings(PerWord(modelTicks, generated), PerWord(pickTicks, generated),
+                    PerWord(textTicks, generated), PerWord(sendTicks, generated)) : null));
             send(new("done", Finish: finish));
         }
         finally { LlamaNative.SamplerFree(sampler); }
     }
+
+    private static double PerWord(long ticks, int words) => ticks * 1000.0 / Stopwatch.Frequency / words;
 
     public void Dispose()
     {

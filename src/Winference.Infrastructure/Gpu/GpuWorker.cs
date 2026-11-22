@@ -63,6 +63,8 @@ public static class GpuWorker
         // Requests are read on their own task, so "stop" is seen even while a reply is being written.
         var requests = Channel.CreateUnbounded<GpuWorkerRequest>(new() { SingleReader = true, SingleWriter = true });
         var stopping = 0;
+        // Replies the app asked to end, by request id. Ids are unique, so a late cancel matches nothing.
+        var cancelled = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         var reading = Task.Run(async () =>
         {
             try
@@ -71,6 +73,7 @@ public static class GpuWorker
                 {
                     var request = GpuWorkerProtocol.Deserialize<GpuWorkerRequest>(line);
                     if (request.Op == "stop") { Volatile.Write(ref stopping, 1); break; }
+                    if (request.Op == "cancel") { if (request.Id is { Length: > 0 } id) cancelled[id] = 0; continue; }
                     await requests.Writer.WriteAsync(request);
                 }
             }
@@ -95,7 +98,12 @@ public static class GpuWorker
                             Send(new("count", Tokens: engine.Count(request.Messages ?? [])));
                             break;
                         case "generate":
-                            engine.Generate(request, () => Volatile.Read(ref stopping) == 1, Send);
+                            try
+                            {
+                                engine.Generate(request, () => Volatile.Read(ref stopping) == 1 ||
+                                    (request.Id is { } id && cancelled.ContainsKey(id)), Send);
+                            }
+                            finally { if (request.Id is { } done) cancelled.TryRemove(done, out _); }
                             break;
                         default:
                             throw new RuntimeException("gpu_request", "The GPU engine received an unknown request.");

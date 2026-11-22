@@ -90,6 +90,21 @@ public sealed class GpuEngineTests(ITestOutputHelper output)
 
         // A longer reply, for a reply speed comparable to llama-bench's 128-token test.
         await AskAsync(broker, [new("user", "Write a long story about a lighthouse keeper.")], 128);
+
+        // Stop mid-reply: the model stays loaded and answers the next message straight away.
+        using var stop = new CancellationTokenSource();
+        var words = 0;
+        GenerationEvent? ended = null;
+        var stopping = new Stopwatch();
+        await foreach (var item in broker.GenerateAsync([new("user", "Write a long story about a dragon.")], 128, stop.Token, 0.2))
+        {
+            if (item.Kind == GenerationEventKind.TextDelta && ++words == 5) { stopping.Start(); stop.Cancel(); }
+            ended = item;
+        }
+        output.WriteLine($"Stopped in {stopping.Elapsed.TotalMilliseconds:0} ms; state {broker.Snapshot.State}");
+        Assert.Equal(GenerationEventKind.Cancelled, ended?.Kind);
+        Assert.Equal(RuntimeState.Ready, broker.Snapshot.State);
+        Assert.Contains("Paris", await AskAsync(broker, [new("user", "What is the capital of France? Answer in one short sentence.")]), StringComparison.OrdinalIgnoreCase);
         await broker.StopAsync();
     }
 

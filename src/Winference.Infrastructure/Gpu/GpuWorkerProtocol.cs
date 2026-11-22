@@ -7,9 +7,12 @@ namespace Winference.Infrastructure.Gpu;
 /// <summary>One chat turn sent to the GPU worker.</summary>
 public sealed record GpuWorkerMessage(string Role, string Content);
 
-/// <summary>A request from the app. Op is "count", "generate" or "stop".</summary>
+/// <summary>
+/// A request from the app. Op is "count", "generate", "cancel" or "stop". A cancel names the generate
+/// request it ends by Id, so a late cancel can never stop the next reply.
+/// </summary>
 public sealed record GpuWorkerRequest(string Op, IReadOnlyList<GpuWorkerMessage>? Messages = null,
-    int MaxTokens = 0, double Temperature = 0.7, bool UseRemaining = false);
+    int MaxTokens = 0, double Temperature = 0.7, bool UseRemaining = false, string? Id = null);
 
 /// <summary>What the worker reports once the model is loaded on the GPU.</summary>
 public sealed record GpuWorkerReady(int ProcessId, string EngineVersion, string Device, string DeviceDescription,

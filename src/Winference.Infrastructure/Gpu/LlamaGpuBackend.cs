@@ -121,6 +121,9 @@ public sealed class LlamaGpuBackend(
         }
     }
 
+    /// <summary>The worker ends a reply when asked and confirms it, so Stop keeps the model loaded.</summary>
+    public bool CancelsInPlace => true;
+
     public async IAsyncEnumerable<GenerationEvent> GenerateAsync(RuntimeSession session, GenerationRequest request,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -128,10 +131,14 @@ public sealed class LlamaGpuBackend(
         if (request.Messages.Any(message => message.HasImages))
             throw new RuntimeException("ImagesUnsupported", "Pictures need a vision model. This GPU model reads text only.");
         await _requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var id = Guid.NewGuid().ToString("N");
+        var sent = false;
+        var settled = false;
         try
         {
             await SendAsync(new GpuWorkerRequest("generate", Wire(request.Messages), request.MaxOutputTokens,
-                request.Temperature, request.UseRemainingContext), cancellationToken).ConfigureAwait(false);
+                request.Temperature, request.UseRemainingContext, id), cancellationToken).ConfigureAwait(false);
+            sent = true;
             while (true)
             {
                 var message = await NextAsync(cancellationToken).ConfigureAwait(false);
@@ -148,19 +155,46 @@ public sealed class LlamaGpuBackend(
                         yield return new(GenerationEventKind.Usage, Usage: new(message.PromptTokens, message.CompletionTokens, message.TokensPerSecond));
                         break;
                     case "done":
+                        settled = true;
                         yield return new(GenerationEventKind.Completed, FinishReason: message.Finish);
                         yield break;
                     case "cancelled":
+                        settled = true;
                         yield return new(GenerationEventKind.Cancelled);
                         yield break;
                     case "error":
+                        settled = true;
                         throw WorkerError(message);
                     default:
                         throw new RuntimeException("gpu_stream", "The GPU engine sent an unexpected reply.");
                 }
             }
         }
-        finally { _requestGate.Release(); }
+        finally
+        {
+            try
+            {
+                // Cancelled or abandoned mid-reply: end it in the worker and wait for the confirmation,
+                // so the next request never reads this reply's leftovers.
+                if (sent && !settled) await CancelAndDrainAsync(id).ConfigureAwait(false);
+            }
+            finally { _requestGate.Release(); }
+        }
+    }
+
+    private async Task CancelAndDrainAsync(string id)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await SendAsync(new GpuWorkerRequest("cancel", Id: id), deadline.Token).ConfigureAwait(false);
+            while ((await NextAsync(deadline.Token).ConfigureAwait(false)).Type is not ("cancelled" or "done" or "error")) { }
+        }
+        catch (Exception error) when (error is OperationCanceledException or RuntimeException)
+        {
+            // Throwing replaces the cancellation, so the broker stops this worker instead of reusing it.
+            throw new RuntimeException("gpu_cancel", "The GPU engine did not stop the reply in time. Load the model again.", error);
+        }
     }
 
     public async Task<PromptTokenCount> CountPromptTokensAsync(RuntimeSession session,

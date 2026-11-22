@@ -248,6 +248,8 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
         GenerationRequest request, ChannelWriter<GenerationEvent> writer)
     {
         GenerationEvent terminal;
+        // A backend that stops a reply in place keeps its model loaded when the user, not Stop, cancelled.
+        var keepSession = false;
         try
         {
             GenerationEvent? receivedTerminal = null;
@@ -266,11 +268,19 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
             }
             operation.Cancellation.Token.ThrowIfCancellationRequested();
             terminal = receivedTerminal ?? throw new RuntimeException("InterruptedStream", "The reply ended unexpectedly. Try loading the model again.");
-            if (terminal.Kind is GenerationEventKind.Cancelled or GenerationEventKind.Failed)
+            if (terminal.Kind is GenerationEventKind.Cancelled && CanKeepSession(operation)) keepSession = true;
+            else if (terminal.Kind is GenerationEventKind.Cancelled or GenerationEventKind.Failed)
             {
                 var cleanupError = await TryStopBackendAsync().ConfigureAwait(false);
                 if (cleanupError is not null) terminal = new(GenerationEventKind.Failed, Error: cleanupError.Message);
             }
+        }
+        catch (OperationCanceledException) when (backend.CancelsInPlace)
+        {
+            // The backend settled its request itself. Stop only if Stop, not the reply's owner, cancelled it.
+            keepSession = CanKeepSession(operation);
+            var cleanupError = keepSession ? null : await TryStopBackendAsync().ConfigureAwait(false);
+            terminal = cleanupError is not null ? new(GenerationEventKind.Failed, Error: cleanupError.Message) : new(GenerationEventKind.Cancelled);
         }
         catch (Exception error)
         {
@@ -288,7 +298,7 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
             if (!IsCurrent(operation) && terminal.Kind == GenerationEventKind.Completed)
                 terminal = new(GenerationEventKind.Cancelled);
             if (IsCurrent(operation))
-                settled = terminal.Kind switch
+                settled = keepSession ? SetSnapshot(RuntimeState.Ready, $"Ready · {session.Device}", session) : terminal.Kind switch
                 {
                     GenerationEventKind.Completed => SetSnapshot(RuntimeState.Ready, $"Ready · {session.Device}", session),
                     GenerationEventKind.Cancelled => SetSnapshot(RuntimeState.Idle, "AI stopped", null),
@@ -384,6 +394,14 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
         lock (_sync) if (ReferenceEquals(_active, operation)) _active = null;
         operation.Completed.TrySetResult();
         operation.Cancellation.Dispose();
+    }
+
+    /// <summary>True when stopping a reply leaves the model loaded and ready.</summary>
+    public bool KeepsModelOnCancel => backend.CancelsInPlace;
+
+    private bool CanKeepSession(ActiveOperation operation)
+    {
+        lock (_sync) return backend.CancelsInPlace && IsCurrent(operation);
     }
 
     private bool IsCurrent(ActiveOperation operation) =>

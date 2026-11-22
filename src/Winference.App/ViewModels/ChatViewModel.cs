@@ -634,8 +634,8 @@ public sealed class ChatViewModel : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// A cancelled reply takes the runtime down, because it cannot prove an abandoned request
-    /// has stopped. Reloading straight away keeps Stop meaning "end this reply".
+    /// An engine that cannot end a reply in place is taken down, because an abandoned request
+    /// cannot be proven stopped. Reloading straight away keeps Stop meaning "end this reply".
     /// </summary>
     private void ReloadAfterStop()
     {
@@ -1162,8 +1162,18 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         }
         _generationCancellation?.Cancel();
         await AwaitOperationAsync(_generationTask);
+        if (StoppedInPlace()) return;
         await _broker.StopAsync();
         ReloadAfterStop();
+    }
+
+    /// <summary>True when the engine ended the reply itself and the model is still loaded, so nothing needs reloading.</summary>
+    private bool StoppedInPlace()
+    {
+        if (!_broker.KeepsModelOnCancel || _broker.Snapshot.State != RuntimeState.Ready) return false;
+        _snapshot = _broker.Snapshot;
+        NotifyStateChanged();
+        return true;
     }
 
     private async Task DisconnectAsync()
@@ -1184,7 +1194,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         {
             _generationCancellation?.Cancel();
             await AwaitOperationAsync(_generationTask);
-            await _broker.StopAsync();
+            if (!StoppedInPlace()) await _broker.StopAsync();
         }
 
         ++_selectionRevision;

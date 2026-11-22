@@ -22,6 +22,7 @@ internal sealed class FakeBackend : IRuntimeBackend
     public Exception? StartFailure { get; set; }
     public Exception? GenerateFailure { get; set; }
     public bool HoldReply { get; set; }
+    public bool CancelsInPlace { get; set; }
     public GenerationRequest? LastRequest { get; private set; }
     public TaskCompletionSource ReplyStarted { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

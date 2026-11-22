@@ -20,4 +20,11 @@ public interface IRuntimeBackend
         return Task.FromResult(PromptTokenCount.Estimate(messages));
     }
     Task StopAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// True when a cancelled GenerateAsync settles its own request before it throws
+    /// OperationCanceledException, so the model stays loaded and ready for the next message.
+    /// When false, a cancelled reply stops the backend, because the abandoned request cannot be proven settled.
+    /// </summary>
+    bool CancelsInPlace => false;
 }

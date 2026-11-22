@@ -49,6 +49,51 @@ public class RuntimeBrokerTests
     }
 
     [Fact]
+    public async Task Stopping_a_reply_keeps_the_model_loaded_when_the_engine_can_end_it_in_place()
+    {
+        var backend = new FakeBackend { HoldReply = true, CancelsInPlace = true };
+        var broker = new RuntimeBroker(backend, TimeSpan.FromSeconds(5));
+        await broker.StartAsync(TestProfiles.Create());
+
+        using var cancel = new CancellationTokenSource();
+        var reply = Task.Run(async () =>
+        {
+            GenerationEvent? last = null;
+            await foreach (var item in broker.GenerateAsync(Prompt, cancellationToken: cancel.Token)) last = item;
+            return last;
+        });
+        await backend.ReplyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cancel.Cancel();
+
+        Assert.Equal(GenerationEventKind.Cancelled, (await reply.WaitAsync(TimeSpan.FromSeconds(5)))?.Kind);
+        Assert.Equal(RuntimeState.Ready, broker.Snapshot.State);
+        Assert.True(broker.KeepsModelOnCancel);
+        Assert.Equal(0, backend.Stops);
+
+        backend.HoldReply = false;
+        GenerationEvent? next = null;
+        await foreach (var item in broker.GenerateAsync(Prompt)) next = item;
+        Assert.Equal(GenerationEventKind.Completed, next?.Kind);
+        Assert.Equal(1, backend.Starts);
+    }
+
+    [Fact]
+    public async Task Unloading_during_a_reply_still_stops_an_engine_that_can_end_replies_in_place()
+    {
+        var backend = new FakeBackend { HoldReply = true, CancelsInPlace = true };
+        var broker = new RuntimeBroker(backend, TimeSpan.FromSeconds(5));
+        await broker.StartAsync(TestProfiles.Create());
+
+        var reply = Task.Run(async () => { await foreach (var _ in broker.GenerateAsync(Prompt)) { } });
+        await backend.ReplyStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await broker.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await reply.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(RuntimeState.Idle, broker.Snapshot.State);
+        Assert.True(backend.Stops >= 1);
+    }
+
+    [Fact]
     public async Task A_crash_during_a_reply_is_reported_and_not_shown_as_ready()
     {
         var backend = new FakeBackend { GenerateFailure = new RuntimeException("crash", "The runtime stopped.") };

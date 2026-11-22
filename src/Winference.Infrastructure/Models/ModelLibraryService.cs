@@ -216,7 +216,7 @@ public sealed class ModelLibraryService
             var artifact = entry.Artifact;
             var profile = new LibraryProfile(
                 registered?.Profile.ProfileId ?? entry.ProfileId, ExecutionMode.GpuOnly,
-                usable ? "Vulkan llama.cpp + ODS bridge" : "Vulkan llama.cpp",
+                usable ? "Vulkan llama.cpp" : "Vulkan llama.cpp",
                 artifact, new(state, summary),
                 usable ? 0 : entry.LengthBytes, entry.LengthBytes,
                 usable ? registered!.ModelPath : downloaded ? destination : null,
@@ -240,7 +240,7 @@ public sealed class ModelLibraryService
             var family = registry is not null ? RegistryFamily(registry) : FamilyForLocalGguf(model);
             var usable = IsUsable(model);
             var profile = new LibraryProfile(
-                model.Profile.ProfileId, ExecutionMode.GpuOnly, "Vulkan llama.cpp + ODS bridge",
+                model.Profile.ProfileId, ExecutionMode.GpuOnly, "Vulkan llama.cpp",
                 new("sha256:" + model.Sha256, family, ModelArtifactFormat.Gguf,
                     model.Metadata.Quantization, "User-selected GGUF", "sha256:" + model.Sha256,
                     model.LengthBytes, model.Sha256, "Vulkan llama.cpp"),

@@ -37,8 +37,6 @@
     <Content Include="..\..\config\model-profiles\llama-3.2-1b-ryzenai-hybrid.json" Link="Profiles\hybrid_llama_small.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\config\catalogs\LICENSE-FastFlowLM.txt" Link="ThirdParty\FastFlowLM-catalog\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\external\lemonade\2026.46.2\**\*" Link="Runtimes\Lemonade\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\..\external\ods\windows\*.ps1" Link="Runtimes\OdsHelpers\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\Winference.Infrastructure\Ods\Invoke-GpuRuntime.ps1" Link="Runtimes\OdsHelpers\Invoke-GpuRuntime.ps1" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\external\ods\LICENSE" Link="ThirdParty\ODS\LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\external\ods\SOURCE-MANIFEST.*" Link="ThirdParty\ODS\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\external\notices\**\*" Link="ThirdParty\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

@@ -181,7 +181,8 @@ public sealed class GpuModelService
             throw State("Choose an existing GGUF file with a complete local path.");
         var fullPath = Path.GetFullPath(path);
         var name = Path.GetFileName(fullPath);
-        // Matches the retained ODS plan's ASCII basename rule; parent folders may contain Unicode.
+        // An ASCII file name was required by the old PowerShell launcher. llama.cpp opens other names
+        // itself, so this rule can be relaxed once such files are tested; parent folders may use Unicode.
         if (name.Length is < 6 or > 240 || name[0] == '.' || name != name.Trim() ||
             !name.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) ||
             name.Any(character => character is < ' ' or > '~' || "\\/:*?\"<>|".Contains(character)))

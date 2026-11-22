@@ -11,7 +11,7 @@ namespace Winference.Infrastructure.Gpu;
 /// <summary>
 /// Implements explicit app-owned acquisition. Construction/inspection never download or execute a runtime.
 /// The pin is llama.cpp v1.0.0 (nightly build b12359), the official Windows Vulkan x64 build.
-/// Publication manifest uses the retained ODS standalone helper's pin.json schema 1.
+/// The installed folder's pin.json lists every payload file with its hash.
 /// </summary>
 public sealed class GpuRuntimeAcquisition
 {

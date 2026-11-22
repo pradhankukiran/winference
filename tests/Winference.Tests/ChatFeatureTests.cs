@@ -489,10 +489,10 @@ public sealed class VisionTests
     public void Pictures_go_to_the_engine_as_openai_content_parts()
     {
         var wire = System.Text.Json.JsonSerializer.Serialize(
-            Winference.Infrastructure.Lemonade.LemonadeBackend.ToWire(new ChatMessage("user", "what is this?", [Picture])));
+            Winference.Infrastructure.Npu.FastFlowLmBackend.ToWire(new ChatMessage("user", "what is this?", [Picture])));
         Assert.Contains("\"type\":\"text\",\"text\":\"what is this?\"", wire);
         Assert.Contains("\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,/9j/2Q==\"}", wire);
-        var plain = System.Text.Json.JsonSerializer.Serialize(Winference.Infrastructure.Lemonade.LemonadeBackend.ToWire(new ChatMessage("user", "hi")));
+        var plain = System.Text.Json.JsonSerializer.Serialize(Winference.Infrastructure.Npu.FastFlowLmBackend.ToWire(new ChatMessage("user", "hi")));
         Assert.Equal("{\"role\":\"user\",\"content\":\"hi\"}", plain);
     }
 

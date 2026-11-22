@@ -3,15 +3,14 @@ using System.Text.Json;
 using Winference.Core.Models;
 using Winference.Core.Runtime;
 
-namespace Winference.Infrastructure.Lemonade;
+namespace Winference.Infrastructure.Npu;
 
+/// <summary>A verified NPU model and the FastFlowLM engine that runs it.</summary>
 public sealed class RuntimeInstallation
 {
     private readonly JsonElement _manifest;
-    public string LemonadePath { get; }
     public string FlmPath { get; }
     public string ModelRoot { get; }
-    public string SessionsRoot { get; }
     public string ModelDirectory
     {
         get
@@ -23,20 +22,20 @@ public sealed class RuntimeInstallation
             return candidate1;
         }
     }
+    /// <summary>FastFlowLM's own name for the model, such as "llama3.2:1b".</summary>
     public string Checkpoint => _manifest.GetProperty("checkpoint").GetString()!;
-    public string LemonadeVersion => _manifest.GetProperty("lemonadeVersion").GetString()!;
     public string ModelName => _manifest.TryGetProperty("modelName", out var name) ? name.GetString()! : Checkpoint;
     public string ModelPublisher => _manifest.TryGetProperty("publisher", out var publisher) ? publisher.GetString()! : "Local model";
     public string TokenizerPolicy => _manifest.TryGetProperty("tokenizerPolicy", out var policy) ? policy.GetString()! : "runtime";
     public ModelProfile Profile { get; }
 
-    public RuntimeInstallation(string manifestPath, string lemonadePath, string flmPath, string modelRoot, string sessionsRoot)
+    public RuntimeInstallation(string manifestPath, string flmPath, string modelRoot)
     {
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         _manifest = document.RootElement.Clone();
         if (_manifest.GetProperty("schemaVersion").GetInt32() != 1) throw new InvalidDataException("Unknown runtime profile version.");
-        LemonadePath = Path.GetFullPath(lemonadePath); FlmPath = Path.GetFullPath(flmPath);
-        ModelRoot = Path.GetFullPath(modelRoot); SessionsRoot = Path.GetFullPath(sessionsRoot);
+        FlmPath = Path.GetFullPath(flmPath);
+        ModelRoot = Path.GetFullPath(modelRoot);
         Profile = new ModelProfile(Get("modelFamilyId"), Get("profileId"), Get("artifactId"),
             Get("providerModelId"), ExecutionMode.NpuOnly, _manifest.GetProperty("contextLength").GetInt32(),
             ReplyReserve(_manifest.GetProperty("contextLength").GetInt32()),
@@ -53,10 +52,8 @@ public sealed class RuntimeInstallation
     {
         if (!OperatingSystem.IsWindows()) return new(false, "NPU chat requires Windows.", "windows_required");
         if (profile != Profile) return new(false, "This model profile has not been qualified.", "profile_mismatch");
-        if (!File.Exists(LemonadePath)) return new(false, "The Lemonade runtime is missing. Restore the complete Winference application folder.", "missing_runtime");
         if (!File.Exists(FlmPath)) return new(false, "An AI component is missing. Return to model setup to restore it.", "missing_flm");
-        if (!await MatchesAsync(LemonadePath, Get("lemonadeExecutableSha256"), cancellationToken).ConfigureAwait(false) ||
-            !await MatchesAsync(FlmPath, Get("flmExecutableSha256"), cancellationToken).ConfigureAwait(false))
+        if (!await MatchesAsync(FlmPath, Get("flmExecutableSha256"), cancellationToken).ConfigureAwait(false))
             return new(false, "The AI components differ from the verified setup. Return to model setup to repair them.", "runtime_mismatch");
         var directory = ModelDirectory;
         foreach (var file in _manifest.GetProperty("modelFiles").EnumerateArray())
@@ -70,18 +67,16 @@ public sealed class RuntimeInstallation
         return new(true, "The selected model files and verified AI components are available.");
     }
 
-    public Dictionary<string, string> CreateEnvironment(string apiKey)
+    /// <summary>The engine's environment: this model folder, no update checks, and no inherited FastFlowLM overrides.</summary>
+    public Dictionary<string, string> CreateEnvironment()
     {
         var result = Environment.GetEnvironmentVariables().Cast<System.Collections.DictionaryEntry>()
-            .Where(x => x.Key is string key && !key.StartsWith("LEMONADE_", StringComparison.OrdinalIgnoreCase))
+            .Where(x => x.Key is string key && !key.StartsWith("FLM_", StringComparison.OrdinalIgnoreCase) &&
+                !key.StartsWith("LEMONADE_", StringComparison.OrdinalIgnoreCase))
             .ToDictionary(x => (string)x.Key, x => (string)x.Value!, StringComparer.OrdinalIgnoreCase);
         result["PATH"] = Path.GetDirectoryName(FlmPath) + ";" + result.GetValueOrDefault("PATH", "");
         result["FLM_MODEL_PATH"] = ModelRoot;
-        result["LEMONADE_API_KEY"] = apiKey;
-        // The tagged backend resolver accepts this process-only path override.
-        // It is needed for the Windows model-discovery path, which ignores
-        // prefer_system. Its target was hash-qualified before process creation.
-        result["LEMONADE_FLM_NPU_BIN"] = FlmPath;
+        result["FLM_DISABLE_UPDATE_CHECK"] = "1";
         return result;
     }
 

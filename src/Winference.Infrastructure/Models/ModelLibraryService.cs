@@ -393,10 +393,10 @@ public sealed class ModelLibraryService
             };
             var profile = new LibraryProfile(
                 $"flm-{model.Id.Replace(':', '-')}-ctx{model.SuggestedContextLength}", ExecutionMode.NpuOnly,
-                $"Lemonade {PinnedRuntimeAcquisition.LemonadeVersion} + FastFlowLM {PinnedRuntimeAcquisition.FlmVersion}",
+                $"FastFlowLM {PinnedRuntimeAcquisition.FlmVersion}",
                 new("flm:" + model.Id, family, ModelArtifactFormat.FastFlowLm, "FastFlowLM package",
                     $"FastFlowLM {PinnedRuntimeAcquisition.FlmVersion} catalog", model.CatalogRevision, model.StorageBytes, null,
-                    $"Lemonade + FastFlowLM {PinnedRuntimeAcquisition.FlmVersion}"),
+                    $"FastFlowLM {PinnedRuntimeAcquisition.FlmVersion}"),
                 new(state, summary, unavailable),
                 installed ? 0 : model.DownloadBytes, model.StorageBytes, model.ExistingModelRoot,
                 state == ModelAvailability.Installed, state == ModelAvailability.DownloadRequired, false,

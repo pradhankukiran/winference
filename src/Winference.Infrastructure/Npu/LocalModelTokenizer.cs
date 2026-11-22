@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 using Microsoft.ML.Tokenizers;
 using Winference.Core.Runtime;
 
-namespace Winference.Infrastructure.Lemonade;
+namespace Winference.Infrastructure.Npu;
 
 /// <summary>
 /// Universal client-side tokenizer that loads vocabulary, BPE merges, and pre-tokenization

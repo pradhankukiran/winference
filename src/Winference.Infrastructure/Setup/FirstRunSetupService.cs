@@ -5,7 +5,7 @@ using System.Text.Json;
 using Winference.Core.Models;
 using Winference.Core.Runtime;
 using Winference.Core.Setup;
-using Winference.Infrastructure.Lemonade;
+using Winference.Infrastructure.Npu;
 using Winference.Infrastructure.Windows;
 
 namespace Winference.Infrastructure.Setup;
@@ -153,8 +153,6 @@ public sealed class FirstRunSetupService : ISetupService
                     root.GetProperty("contextLength").GetInt32() != saved.ContextLength ||
                     root.GetProperty("setupRuntimePath").GetString() != saved.FlmPath ||
                     root.GetProperty("setupModelRoot").GetString() != saved.ModelRoot ||
-                    root.GetProperty("lemonadeExecutableSha256").GetString() != PinnedRuntimeAcquisition.LemonadeExeSha256 ||
-                    root.GetProperty("lemonadeVersion").GetString() != PinnedRuntimeAcquisition.LemonadeVersion ||
                     flmHash != PinnedRuntimeAcquisition.PortableExeSha256)
                     throw new RuntimeException("setup_identity", "The saved model selection and its verified files do not match. Choose your model again.");
                 var files = root.GetProperty("modelFiles").Deserialize<VerifiedModelFile[]>(AtomicJson.Options);
@@ -244,9 +242,9 @@ public sealed class FirstRunSetupService : ISetupService
                 throw new RuntimeException("setup_busy", "Stop the current model before choosing another model.");
             await previous.DisposeAsync().ConfigureAwait(false);
         }
-        var installation = new RuntimeInstallation(manifest, _paths.LemonadePath, runtime, modelRoot, _paths.SessionsRoot);
+        var installation = new RuntimeInstallation(manifest, runtime, modelRoot);
         installation.Profile.Validate();
-        var broker = new RuntimeBroker(new LemonadeBackend(installation));
+        var broker = new RuntimeBroker(new FastFlowLmBackend(installation));
         var prepared = new PreparedModel(model, installation.Profile, broker, manifest);
         lock (_sync) { _broker = broker; _prepared = prepared; }
         return prepared;
@@ -255,8 +253,6 @@ public sealed class FirstRunSetupService : ISetupService
     private async Task<string> WriteManifestAsync(CatalogModel model, string runtime, string modelRoot, IReadOnlyList<VerifiedModelFile> files,
         int context, CancellationToken token)
     {
-        if (!File.Exists(_paths.LemonadePath) || await PinnedRuntimeAcquisition.HashAsync(_paths.LemonadePath, token).ConfigureAwait(false) != PinnedRuntimeAcquisition.LemonadeExeSha256)
-            throw new RuntimeException("missing_runtime", "The bundled AI supervisor is missing or changed. Restore the full Winference application folder.");
         var identity = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(files, AtomicJson.Options)));
         var profile = model.Id.Replace(':', '-') + "-flm" + PinnedRuntimeAcquisition.FlmVersion + "-npu-ctx" + context + "-" + identity[..12];
         var path = Path.Combine(_paths.DataRoot, "Manifests", profile, "model.json");
@@ -266,7 +262,6 @@ public sealed class FirstRunSetupService : ISetupService
             providerModelId = model.ProviderId, checkpoint = model.Id, executionMode = "NpuOnly", contextLength = context,
             maxOutputTokens = RuntimeInstallation.ReplyReserve(context), modelDirectory = model.DirectoryName, modelFiles = files,
             flmVersion = PinnedRuntimeAcquisition.FlmVersion, flmExecutableSha256 = await PinnedRuntimeAcquisition.HashAsync(runtime, token).ConfigureAwait(false),
-            lemonadeVersion = PinnedRuntimeAcquisition.LemonadeVersion, lemonadeExecutableSha256 = PinnedRuntimeAcquisition.LemonadeExeSha256,
             modelName = model.DisplayName, publisher = model.Publisher, supportsImages = model.SupportsImages,
             tokenizerPolicy = files.Any(f => string.Equals(f.Name, "tokenizer.json", StringComparison.OrdinalIgnoreCase)) ? "local-exact" : "estimate",
             catalogRevision = FlmModelCatalog.Revision,

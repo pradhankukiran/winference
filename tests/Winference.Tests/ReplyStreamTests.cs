@@ -1,6 +1,7 @@
 using System.Text;
 using Winference.Core.Runtime;
 using Winference.Infrastructure.Lemonade;
+using Winference.Infrastructure.Npu;
 
 namespace Winference.Tests;
 
@@ -60,5 +61,35 @@ public class ReplyStreamTests
         await foreach (var _ in broker.GenerateAsync(prompt, 100)) { }
         Assert.False(backend.LastRequest!.UseRemainingContext);
         Assert.Equal(100, backend.LastRequest.MaxOutputTokens);
+    }
+}
+
+public class FastFlowLmLaunchTests
+{
+    [Fact]
+    public void The_npu_engine_serves_only_the_chosen_model_on_this_pc()
+    {
+        var folder = Directory.CreateTempSubdirectory("winference-flm-");
+        try
+        {
+            var manifest = Path.Combine(folder.FullName, "model.json");
+            File.WriteAllText(manifest, """
+                {"schemaVersion":1,"modelFamilyId":"llama3.2:1b","profileId":"p","artifactId":"sha256:a",
+                 "providerModelId":"llama3.2-1b-FLM","checkpoint":"llama3.2:1b","contextLength":4096,"modelDirectory":"Llama-3.2-1B-NPU2"}
+                """);
+            var installation = new RuntimeInstallation(manifest, Path.Combine(folder.FullName, "flm.exe"), folder.FullName);
+            var arguments = new FastFlowLmBackend(installation).LaunchArguments(4096);
+
+            Assert.Equal(["serve", "llama3.2:1b"], arguments[..2]);
+            Assert.Contains("--ctx-len", arguments);
+            Assert.Equal("4096", arguments[Array.IndexOf(arguments, "--ctx-len") + 1]);
+            Assert.Equal("127.0.0.1", arguments[Array.IndexOf(arguments, "--host") + 1]);
+            Assert.Equal("0", arguments[Array.IndexOf(arguments, "--cors") + 1]);
+
+            var environment = installation.CreateEnvironment();
+            Assert.Equal(folder.FullName, environment["FLM_MODEL_PATH"]);
+            Assert.DoesNotContain(environment.Keys, key => key.StartsWith("LEMONADE_", StringComparison.OrdinalIgnoreCase));
+        }
+        finally { folder.Delete(true); }
     }
 }

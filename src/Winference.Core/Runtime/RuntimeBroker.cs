@@ -416,7 +416,7 @@ public sealed class RuntimeBroker(IRuntimeBackend backend, TimeSpan? shutdownTim
     {
         if (session.SessionId == Guid.Empty || session.Profile != profile || session.EffectiveContextLength != profile.ContextLength ||
             !session.Endpoint.IsAbsoluteUri || !session.Endpoint.IsLoopback ||
-            session.Endpoint.Scheme is not ("http" or "https") ||
+            session.Endpoint.Scheme is not ("http" or "https" or "net.pipe") ||
             string.IsNullOrWhiteSpace(session.Engine) || string.IsNullOrWhiteSpace(session.Device) ||
             string.IsNullOrWhiteSpace(session.OwnershipProof))
             throw new RuntimeException("ReadinessMismatch", "The loaded model or device could not be verified. Load it again.");

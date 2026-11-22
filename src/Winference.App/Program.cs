@@ -10,6 +10,8 @@ internal static class Program
     {
         if (args.Length > 0 && args[0] == "--hybrid-worker")
             return HybridWorker.RunAsync(args).GetAwaiter().GetResult();
+        if (args.Length > 0 && args[0] == Winference.Infrastructure.Gpu.GpuWorkerProtocol.WorkerFlag)
+            return Winference.Infrastructure.Gpu.GpuWorker.RunAsync(args).GetAwaiter().GetResult();
         StartInterface();
         return 0;
     }

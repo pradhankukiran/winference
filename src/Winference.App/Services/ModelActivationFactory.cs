@@ -5,7 +5,6 @@ using Winference.Core.Runtime;
 using Winference.Core.Setup;
 using Winference.Infrastructure.Gpu;
 using Winference.Infrastructure.Hybrid;
-using Winference.Infrastructure.Ods;
 using Winference.Infrastructure.Selection;
 using Winference.Infrastructure.Setup;
 
@@ -138,8 +137,8 @@ internal sealed class ModelActivationFactory(
         return new(prepared, service);
     }
 
-    private OdsGpuBackend CreateGpuBackend(GpuModelRegistration model) => new(model, gpuRuntime.ExpectedInstallation,
-        Path.Combine(applicationDirectory, "Runtimes", "OdsHelpers"), Path.Combine(dataRoot, "Sessions", "Gpu"));
+    private LlamaGpuBackend CreateGpuBackend(GpuModelRegistration model) => new(model, gpuRuntime.ExpectedInstallation,
+        Environment.ProcessPath ?? Path.Combine(applicationDirectory, "Winference.exe"));
 
     private HybridRyzenAiBackend CreateHybridBackend(HybridModelRegistration model) => new(model, hybridRuntime.ExpectedInstallation,
         Environment.ProcessPath ?? Path.Combine(applicationDirectory, "Winference.exe"), Path.Combine(dataRoot, "Sessions", "Hybrid"));

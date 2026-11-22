@@ -10,16 +10,16 @@ namespace Winference.Infrastructure.Gpu;
 
 /// <summary>
 /// Implements explicit app-owned acquisition. Construction/inspection never download or execute a runtime.
-/// The pin is llama.cpp b12109, the Vulkan build on Lemonade's main branch in November 2026.
+/// The pin is llama.cpp v1.0.0 (nightly build b12359), the official Windows Vulkan x64 build.
 /// Publication manifest uses the retained ODS standalone helper's pin.json schema 1.
 /// </summary>
 public sealed class GpuRuntimeAcquisition
 {
-    public const string ReleaseTag = "b12109";
-    public const int Build = 12109;
-    public const string AssetName = "llama-b12109-bin-win-vulkan-x64.zip";
-    public const string ArchiveSha256 = "ed1d85207f58a292b5e9b9b529ecd4439bb8a60c5460dab0c137ef94d4322f2a";
-    public const long ArchiveBytes = 37_661_160;
+    public const string ReleaseTag = "b12359";
+    public const int Build = 12359;
+    public const string AssetName = "llama-b12359-bin-win-vulkan-x64.zip";
+    public const string ArchiveSha256 = "e8d18c6e4210cca87e7307c2ea78363ac8d158e4e1397358ec96ab70b53a0d5e";
+    public const long ArchiveBytes = 38_090_643;
     public static readonly Uri DownloadUri = new($"https://github.com/ggml-org/llama.cpp/releases/download/{ReleaseTag}/{AssetName}");
     private const long MaximumExtractedBytes = 1_000_000_000;
     private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -88,7 +88,7 @@ public sealed class GpuRuntimeAcquisition
                         files.Add(new(relative, await HashFileAsync(path, cancellationToken).ConfigureAwait(false), new FileInfo(path).Length));
                     }
                 }
-                if (!files.Any(file => file.Path == "llama-server.exe") || !files.Any(file => file.Path == "ggml-vulkan.dll"))
+                if (!files.Any(file => file.Path == "llama.dll") || !files.Any(file => file.Path == "ggml-vulkan.dll"))
                     throw new RuntimeException("gpu_runtime_files", "The GPU archive does not contain its required Windows Vulkan files. It was not installed.");
                 // Keep every payload file, including original licenses and notices.
                 await AtomicJson.WriteAsync(Path.Combine(staging, "pin.json"), new RuntimePin(1, ReleaseTag,
@@ -149,7 +149,7 @@ public sealed class GpuRuntimeAcquisition
                 return false;
             using var archive = ZipFile.OpenRead(archivePath);
             var entries = PayloadEntries(archive);
-            if (pin.Files.Count != entries.Count || !entries.Any(item => item.Relative == "llama-server.exe") ||
+            if (pin.Files.Count != entries.Count || !entries.Any(item => item.Relative == "llama.dll") ||
                 !entries.Any(item => item.Relative == "ggml-vulkan.dll")) return false;
             var listed = new Dictionary<string, RuntimeFile>(StringComparer.OrdinalIgnoreCase);
             foreach (var file in pin.Files)

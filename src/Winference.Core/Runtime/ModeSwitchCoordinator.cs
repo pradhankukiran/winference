@@ -131,7 +131,7 @@ public sealed class ModeSwitchCoordinator
         if (session.SessionId == Guid.Empty || session.Profile != target ||
             session.EffectiveContextLength != target.ContextLength || string.IsNullOrWhiteSpace(session.Device) ||
             string.IsNullOrWhiteSpace(session.Engine) || string.IsNullOrWhiteSpace(session.OwnershipProof) ||
-            !session.Endpoint.IsAbsoluteUri || !session.Endpoint.IsLoopback || session.Endpoint.Scheme is not ("http" or "https"))
+            !session.Endpoint.IsAbsoluteUri || !session.Endpoint.IsLoopback || session.Endpoint.Scheme is not ("http" or "https" or "net.pipe"))
             throw new RuntimeException("SwitchIdentity", "The selected model or device could not be verified.");
     }
 }

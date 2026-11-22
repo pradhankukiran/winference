@@ -243,3 +243,17 @@ public class IdleUnloadPolicyTests
     [Fact] public void Never_means_never() => Assert.False(IdleUnloadPolicy.ShouldUnload(Start, Start.AddDays(7), null, true, false));
     [Fact] public void Nothing_happens_when_no_model_is_loaded() => Assert.False(IdleUnloadPolicy.ShouldUnload(Start, Start.AddHours(1), Limit, false, false));
 }
+
+public sealed class GpuContextLengthTests
+{
+    [Theory]
+    [InlineData(32768, 32768)]
+    [InlineData(128000, 128000)]
+    [InlineData(131072, 131072)]
+    [InlineData(1_000_000, 131072)]
+    [InlineData(5000, 4864)]
+    [InlineData(100, 256)]
+    [InlineData(null, 4096)]
+    public void A_gpu_model_uses_its_own_default_length(int? modelDefault, int expected) =>
+        Assert.Equal(expected, Winference.Infrastructure.Models.GpuCatalogModel.ContextFor(modelDefault));
+}

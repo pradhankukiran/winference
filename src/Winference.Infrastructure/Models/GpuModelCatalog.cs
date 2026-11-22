@@ -18,11 +18,20 @@ public sealed record GpuCatalogModel(
     string Quantization,
     int ContextLength)
 {
-    /// <summary>Mirrors the GPU registration's bounded profile context so identity does not change after download.</summary>
-    public const int MaximumProfileContextLength = 2048;
+    /// <summary>The longest conversation the GPU engine accepts.</summary>
+    public const int MaximumContextLength = 131072;
+    /// <summary>Used when a model file does not state its own conversation length.</summary>
+    public const int FallbackContextLength = 4096;
+
+    /// <summary>
+    /// A GPU model uses its own default conversation length, in steps of 256. The downloaded file's
+    /// header decides the final value, so this listed one only names the model until it is downloaded.
+    /// </summary>
+    public static int ContextFor(int? modelDefault) =>
+        Math.Max(256, Math.Min(MaximumContextLength, modelDefault ?? FallbackContextLength) / 256 * 256);
 
     public string ArtifactId => "sha256:" + Sha256;
-    public int ProfileContextLength => Math.Min(MaximumProfileContextLength, ContextLength) / 256 * 256;
+    public int ProfileContextLength => ContextFor(ContextLength);
     public string ProfileId => $"gguf-{Sha256}-vulkan-c{ProfileContextLength}";
     public string DisplayName => Family.DisplayName;
 

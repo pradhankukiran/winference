@@ -58,8 +58,7 @@ public sealed class GpuModelService
         var after = new FileInfo(fullPath);
         if (file.Length != length || after.Length != length || after.LastWriteTimeUtc != modified)
             throw new RuntimeException("gpu_model_changed", "The model changed while it was being verified. Finish the download and choose it again.");
-        var context = Math.Min(GpuCatalogModel.MaximumProfileContextLength,
-            metadata.MaximumContextLength ?? GpuCatalogModel.MaximumProfileContextLength) / 256 * 256;
+        var context = GpuCatalogModel.ContextFor(metadata.MaximumContextLength);
         var modelId = "gguf:" + digest;
         var profile = Profile(modelId, digest, context, Path.GetFileName(fullPath));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -164,7 +163,7 @@ public sealed class GpuModelService
             string.IsNullOrWhiteSpace(model.Metadata.Architecture) || string.IsNullOrWhiteSpace(model.Metadata.ChatTemplate) ||
             string.IsNullOrWhiteSpace(model.Metadata.TokenizerModel) || model.Metadata.ChatTemplate.Length > 1_048_576 ||
             model.Metadata.Version is not (2 or 3) || model.Metadata.TensorCount is 0 or > 1_000_000 ||
-            model.Profile.ContextLength is < 512 or > 2048 ||
+            model.Profile.ContextLength is < 256 or > GpuCatalogModel.MaximumContextLength ||
             model.Metadata.MaximumContextLength is { } max && model.Profile.ContextLength > max ||
             model.Profile != Profile("gguf:" + model.Sha256, model.Sha256, model.Profile.ContextLength, Path.GetFileName(model.ModelPath)))
             throw State("The GPU model registration is invalid. Choose the GGUF file again; existing files were preserved.");

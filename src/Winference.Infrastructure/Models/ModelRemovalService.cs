@@ -216,7 +216,8 @@ public sealed class ModelRemovalService
         if (profile.ExecutionMode == ExecutionMode.GpuOnly)
         {
             var entry = _gpuCatalog.Models.SingleOrDefault(model => model.ArtifactId == profile.Artifact.Id);
-            if (entry is null || profile.ProfileId != entry.ProfileId) return null;
+            // The file's digest identifies it; its profile may carry the downloaded file's own context length.
+            if (entry is null) return null;
             var directory = Path.Combine(_root, "Models", "Gpu", entry.Id);
             var destination = Path.Combine(directory, entry.FileName);
             if (profile.InstalledPath is not null && !SamePath(profile.InstalledPath, destination)) return null;
